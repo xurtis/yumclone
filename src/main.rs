@@ -5,8 +5,8 @@ extern crate serde_xml_rs;
 extern crate tree_magic;
 extern crate flate2;
 
-mod repomd;
-mod primary;
+mod repo;
+mod package;
 
 fn main() {
 }
