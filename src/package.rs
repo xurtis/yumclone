@@ -127,12 +127,14 @@ impl Metadata {
 
         loop {
             match (start_iter.peek(), end_iter.peek()) {
-                (Some(_), Some(_)) => deltas.push(Metadata::compare_first(&mut start_iter, &mut end_iter)),
+                (Some(_), Some(_)) => {
+                    deltas.push(Metadata::compare_first(&mut start_iter, &mut end_iter))
+                }
                 (Some(_), None) => deltas.push(start_iter.next().unwrap().delete()),
                 (None, Some(_)) => deltas.push(end_iter.next().unwrap().fetch()),
                 (None, None) => break,
             };
-        };
+        }
 
         deltas.sort();
         deltas
@@ -165,8 +167,7 @@ impl Metadata {
 
     /// Generate a sorted list of packages for the repository.
     fn packages(&self) -> Vec<&Package> {
-        let mut packages: Vec<&Package> = self.packages.iter()
-            .collect();
+        let mut packages: Vec<&Package> = self.packages.iter().collect();
 
         packages.sort_unstable();
         packages
@@ -176,8 +177,13 @@ impl Metadata {
 #[cfg(test)]
 mod test {
     use super::{Metadata, Delta};
-    const LOCAL_XML: &[u8] = include_bytes!("test-data/local/repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz");
-    const REMOTE_XML: &[u8] = include_bytes!("test-data/remote/repodata/328a9f961ff596aedac41d051634325110b8fb30b87c00f678c257644337d1d6-primary.xml.gz");
+
+    const LOCAL_XML: &[u8] = include_bytes!(
+        "test-data/local/repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz"
+    );
+    const REMOTE_XML: &[u8] = include_bytes!(
+        "test-data/remote/repodata/328a9f961ff596aedac41d051634325110b8fb30b87c00f678c257644337d1d6-primary.xml.gz"
+    );
 
     #[test]
     pub fn deltas() {

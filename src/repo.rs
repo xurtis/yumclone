@@ -40,7 +40,7 @@ impl Repo {
     pub fn primary_path(&self) -> Option<String> {
         for datum in &self.data {
             if datum.datum == "primary" {
-                return Some(datum.location.href.clone())
+                return Some(datum.location.href.clone());
             }
         }
 

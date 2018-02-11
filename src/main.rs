@@ -8,5 +8,4 @@ extern crate flate2;
 mod repo;
 mod package;
 
-fn main() {
-}
+fn main() {}
