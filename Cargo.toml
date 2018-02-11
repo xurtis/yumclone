@@ -5,3 +5,8 @@ authors = ["Curtis Millar <curtis@curtism.me>"]
 description = "A tool to clone and synchronise yum repositories."
 
 [dependencies]
+serde-xml-rs = "0.2.1"
+serde = "1.0"
+serde_derive = "1.0"
+tree_magic = "0.2"
+flate2 = "1.0"
