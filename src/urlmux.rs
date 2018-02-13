@@ -14,7 +14,7 @@ pub struct UrlMux {
 
 impl UrlMux {
     /// Create a new URL Mux.
-    fn new(src: String, dst: String, fields: HashMap<String, Vec<String>>) -> UrlMux {
+    fn new<T: Into<TagFieldIter>>(src: String, dst: String, fields: T) -> UrlMux {
         UrlMux {
             src: src,
             dst: dst,
@@ -55,6 +55,24 @@ impl From<TagField> for TagFieldIter {
     fn from(mut field: TagField) -> TagFieldIter {
         let index = vec![0; field.len()];
         let field = field.drain().collect();
+        TagFieldIter {
+            field: field,
+            index: Some(index),
+        }
+    }
+}
+
+impl<'s> From<HashMap<&'s str, Vec<&'s str>>> for TagFieldIter {
+    /// Create an iterator over the tag field.
+    fn from(mut field: HashMap<&'s str, Vec<&'s str>>) -> TagFieldIter {
+        let index = vec![0; field.len()];
+        let field = field
+            .drain()
+            .map(|(k, v)| (
+                k.to_string(),
+                v.into_iter().map(str::to_string).collect()
+            ))
+            .collect();
         TagFieldIter {
             field: field,
             index: Some(index),
@@ -146,10 +164,10 @@ fn tag_finder() -> Regex {
 mod test {
     use super::*;
 
-    fn tags() -> TagField {
+    fn tags() -> HashMap<&'static str, Vec<&'static str>> {
         vec![
-            ("os".to_string(), vec!["fedora", "epel"].into_iter().map(str::to_string).collect()),
-            ("arch".to_string(), vec!["SRPMS", "x86_64", "i686"].into_iter().map(str::to_string).collect()),
+            ("os", vec!["fedora", "epel"]),
+            ("arch", vec!["SRPMS", "x86_64", "i686"]),
         ].into_iter().collect()
     }
 
