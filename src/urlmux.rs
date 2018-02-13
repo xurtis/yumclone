@@ -149,7 +149,8 @@ impl Replacer for TagSet {
         if let Some(ref val) = self.map.get(&caps["tag"]) {
             dst.push_str(val);
         } else {
-            panic!("Invalid tag name specified in url");
+            // Push the string if not found.
+            dst.push_str(&caps[0]);
         }
     }
 }
