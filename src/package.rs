@@ -26,24 +26,24 @@ pub struct Package {
 }
 
 impl Package {
-    fn copy_location(&self) -> String {
-        self.location.href.clone()
+    fn location(&self) -> &str {
+        self.location.href.as_ref()
     }
 
-    fn delete(&self) -> Delta {
-        Delta::Delete(self.copy_location())
+    fn delete<'s>(&'s self) -> Delta<'s> {
+        Delta::Delete(self.location())
     }
 
-    fn replace(&self) -> Delta {
-        Delta::Replace(self.copy_location())
+    fn replace<'s>(&'s self) -> Delta<'s> {
+        Delta::Replace(self.location())
     }
 
-    fn fetch(&self) -> Delta {
-        Delta::Fetch(self.copy_location())
+    fn fetch<'s>(&'s self) -> Delta<'s> {
+        Delta::Fetch(self.location())
     }
 
-    fn retain(&self) -> Delta {
-        Delta::Retain(self.copy_location())
+    fn retain<'s>(&'s self) -> Delta<'s> {
+        Delta::Retain(self.location())
     }
 }
 
@@ -85,15 +85,15 @@ struct Checksum {
 /// For the file at the given path relative to the repository root,
 /// what action should be taken to advance the syncronisation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-pub enum Delta {
+pub enum Delta<'r> {
     /// Download a new file at a given location (remote -> local)
-    Fetch(String),
+    Fetch(&'r str),
     /// Replace a file at a given location (remote -> local)
-    Replace(String),
+    Replace(&'r str),
     /// Keep the existing copy of the file (local)
-    Retain(String),
+    Retain(&'r str),
     /// Delete a file at a given location (local)
-    Delete(String),
+    Delete(&'r str),
 }
 
 fn error_string<T, E: Error>(result: Result<T, E>) -> Result<T, String> {
@@ -127,7 +127,7 @@ impl Metadata {
     }
 
     /// Generate the difference between two metadata collections.
-    pub fn delta(&self, other: &Metadata) -> Vec<Delta> {
+    pub fn delta<'s>(&'s self, other: &'s Metadata) -> Vec<Delta<'s>> {
         let start = self.packages();
         let mut start_iter = start.into_iter().peekable();
         let end = other.packages();
@@ -150,9 +150,9 @@ impl Metadata {
     }
 
     /// Compare the heads of two iterators to determine an action to take
-    fn compare_first<'p, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta
+    fn compare_first<'s, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta<'s>
     where
-        I: Iterator<Item = &'p Package>,
+        I: Iterator<Item = &'s Package>,
     {
         let from = start.peek().unwrap().clone();
         let to = end.peek().unwrap().clone();
