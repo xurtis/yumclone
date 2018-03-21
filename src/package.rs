@@ -1,3 +1,5 @@
+//! Representation of package metadata from a YUM repository.
+
 use serde_xml_rs as xml;
 use tree_magic as magic;
 use flate2::read::GzDecoder;
@@ -7,12 +9,14 @@ use std::iter::Peekable;
 use std::io::Read;
 use serde::Deserialize;
 
+/// A collection of package metadata.
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
     #[serde(rename = "package", default)]
     packages: Vec<Package>,
 }
 
+/// Metadata for a single package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct Package {
     name: String,
@@ -43,6 +47,7 @@ impl Package {
     }
 }
 
+/// Version metadata for a single package.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct Version {
     epoch: String,
@@ -62,8 +67,10 @@ impl Display for Version {
     }
 }
 
+/// Location information for a package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 struct Location {
+    /// Location of the package relative to the root.
     href: String,
 }
 
@@ -75,15 +82,17 @@ struct Checksum {
     sum: String,
 }
 
+/// For the file at the given path relative to the repository root,
+/// what action should be taken to advance the syncronisation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub enum Delta {
-    /// Download a new file at a given location
+    /// Download a new file at a given location (remote -> local)
     Fetch(String),
-    /// Replace a file at a given location
+    /// Replace a file at a given location (remote -> local)
     Replace(String),
-    /// Keep the existing copy of the file
+    /// Keep the existing copy of the file (local)
     Retain(String),
-    /// Delete a file at a given location
+    /// Delete a file at a given location (local)
     Delete(String),
 }
 
@@ -117,7 +126,7 @@ impl Metadata {
         }
     }
 
-    /// Generate the difference between two repositories.
+    /// Generate the difference between two metadata collections.
     pub fn delta(&self, other: &Metadata) -> Vec<Delta> {
         let start = self.packages();
         let mut start_iter = start.into_iter().peekable();
@@ -141,7 +150,7 @@ impl Metadata {
     }
 
     /// Compare the heads of two iterators to determine an action to take
-    pub fn compare_first<'p, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta
+    fn compare_first<'p, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta
     where
         I: Iterator<Item = &'p Package>,
     {

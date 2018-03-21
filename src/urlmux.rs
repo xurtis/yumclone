@@ -5,16 +5,24 @@ use std::collections::HashMap;
 use std::convert::{From, Into};
 
 /// A Generator of URL pairs for a given set of tags.
-pub struct UrlMux {
-    src: String,
-    dst: String,
-    fields: TagFieldIter,
+pub struct UrlMux<'a, 'b, 's> {
+    src: &'a str,
+    dst: &'b str,
+    fields: TagFieldIter<'s>,
     tag_search: Regex,
 }
 
-impl UrlMux {
+impl<'a, 'b, 's> UrlMux<'a, 'b, 's> {
     /// Create a new URL Mux.
-    fn new<T: Into<TagFieldIter>>(src: String, dst: String, fields: T) -> UrlMux {
+    ///
+    /// ```rust
+    /// let tags = HashMap
+    /// let mux = UrlMux::new(
+    /// ```
+    pub fn new<T>(src: &'a str, dst: &'b str, fields: T) -> UrlMux<'a, 'b, 's>
+    where
+        T: Into<TagFieldIter<'s>>,
+    {
         UrlMux {
             src: src,
             dst: dst,
@@ -24,7 +32,7 @@ impl UrlMux {
     }
 }
 
-impl Iterator for UrlMux {
+impl<'a, 'b, 's> Iterator for UrlMux<'a, 'b, 's> {
     type Item = (String, String);
 
     fn next(&mut self) -> Option<(String, String)> {
@@ -45,33 +53,18 @@ type TagField = HashMap<String, Vec<String>>;
 
 /// An iterator over all of the combinations in a tag field.
 #[derive(Debug)]
-struct TagFieldIter {
-    field: Vec<(String, Vec<String>)>,
+pub struct TagFieldIter<'s> {
+    field: Vec<(&'s str, Vec<&'s str>)>,
     index: Option<Vec<usize>>,
 }
 
-impl From<TagField> for TagFieldIter {
+impl<'s> From<&'s TagField> for TagFieldIter<'s> {
     /// Create an iterator over the tag field.
-    fn from(mut field: TagField) -> TagFieldIter {
-        let index = vec![0; field.len()];
-        let field = field.drain().collect();
-        TagFieldIter {
-            field: field,
-            index: Some(index),
-        }
-    }
-}
-
-impl<'s> From<HashMap<&'s str, Vec<&'s str>>> for TagFieldIter {
-    /// Create an iterator over the tag field.
-    fn from(mut field: HashMap<&'s str, Vec<&'s str>>) -> TagFieldIter {
+    fn from(field: &'s TagField) -> TagFieldIter<'s> {
         let index = vec![0; field.len()];
         let field = field
-            .drain()
-            .map(|(k, v)| (
-                k.to_string(),
-                v.into_iter().map(str::to_string).collect()
-            ))
+            .iter()
+            .map(|(k, v)| (k.as_ref(), v.iter().map(String::as_ref).collect()))
             .collect();
         TagFieldIter {
             field: field,
@@ -80,17 +73,31 @@ impl<'s> From<HashMap<&'s str, Vec<&'s str>>> for TagFieldIter {
     }
 }
 
-impl Iterator for TagFieldIter {
-    type Item = TagSet;
+impl<'s> From<HashMap<&'s str, Vec<&'s str>>> for TagFieldIter<'s> {
+    /// Create an iterator over the tag field.
+    fn from(mut field: HashMap<&'s str, Vec<&'s str>>) -> TagFieldIter {
+        let index = vec![0; field.len()];
+        let field = field
+            .drain()
+            .collect();
+        TagFieldIter {
+            field: field,
+            index: Some(index),
+        }
+    }
+}
 
-    fn next(&mut self) -> Option<TagSet> {
+impl<'s> Iterator for TagFieldIter<'s> {
+    type Item = TagSet<'s>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let next = self.next_tagset();
         self.index = self.next_index();
         next
     }
 }
 
-impl TagFieldIter {
+impl<'s> TagFieldIter<'s> {
     /// Increment the index.
     fn next_index(&self) -> Option<Vec<usize>> {
         if let Some(mut next) = self.index.clone() {
@@ -107,14 +114,14 @@ impl TagFieldIter {
     }
 
     /// Get a value based on an index.
-    fn next_tagset(&self) -> Option<TagSet> {
+    fn next_tagset(&self) -> Option<TagSet<'s>> {
         // self.index.iter().enumerate().map(|(k, i)| self.fieldself.keys[k]
         if let Some(ref index) = self.index {
-            let tagset: HashMap<String, String> = index
+            let tagset: HashMap<&str, &str> = index
                 .iter()
                 .cloned()
                 .enumerate()
-                .map(|(t, v)| (self.field[t].0.clone(), self.field[t].1[v].clone()))
+                .map(|(t, v)| (self.field[t].0.as_ref(), self.field[t].1[v].as_ref()))
                 .collect();
             Some(tagset.into())
         } else {
@@ -124,17 +131,17 @@ impl TagFieldIter {
 }
 
 /// A Set of tags that can be used to replace tags in a URL string.
-struct TagSet {
-    map: HashMap<String, String>,
+pub struct TagSet<'s> {
+    map: HashMap<&'s str, &'s str>,
 }
 
-impl From<HashMap<String, String>> for TagSet {
-    fn from(map: HashMap<String, String>) -> TagSet {
+impl<'s> From<HashMap<&'s str, &'s str>> for TagSet<'s> {
+    fn from(map: HashMap<&'s str, &'s str>) -> TagSet<'s> {
         TagSet { map }
     }
 }
 
-impl<'t> Replacer for &'t TagSet {
+impl<'t, 's> Replacer for &'t TagSet<'s> {
     fn replace_append(&mut self, caps: &Captures, dst: &mut String) {
         if let Some(ref val) = self.map.get(&caps["tag"]) {
             dst.push_str(val);
@@ -144,7 +151,7 @@ impl<'t> Replacer for &'t TagSet {
     }
 }
 
-impl Replacer for TagSet {
+impl<'s> Replacer for TagSet<'s> {
     fn replace_append(&mut self, caps: &Captures, dst: &mut String) {
         if let Some(ref val) = self.map.get(&caps["tag"]) {
             dst.push_str(val);
@@ -172,14 +179,9 @@ mod test {
         ].into_iter().collect()
     }
 
-    fn tag_iter() -> TagFieldIter {
-        tags().into()
-    }
-
     #[test]
     fn create_tag_field() {
-        let fields = tag_iter();
-
+        let fields: TagFieldIter = tags().into();
         let sets: Vec<_> = fields.collect();
         assert_eq!(sets.len(), 6);
     }
@@ -189,7 +191,7 @@ mod test {
         use std::collections::BTreeSet;
 
         let finder = tag_finder();
-        let fields = tag_iter();
+        let fields: TagFieldIter = tags().into();
         let variants: BTreeSet<String> = fields
             .map(|f| finder.replace_all("$os/$arch", f).into_owned())
             .collect();
@@ -208,8 +210,8 @@ mod test {
 
         let tagset = tags();
         let mux = UrlMux::new(
-            "src/$os/$arch".to_string(),
-            "dst/$os/$arch".to_string(),
+            "src/$os/$arch",
+            "dst/$os/$arch",
             tagset,
         );
         let variants: BTreeSet<(String, String)> = mux.collect();

@@ -1,6 +1,9 @@
+//! Represetnation of repository metadata.
+
 use serde_xml_rs as xml;
 use std::io::Read;
 
+/// Representation of a whole repository.
 #[derive(Debug, Deserialize)]
 pub struct Repo {
     revision: u64,
@@ -27,6 +30,7 @@ impl PartialEq for Repo {
 }
 
 impl Repo {
+    /// Read metadata for an entire repository.
     pub fn decode<R: Read>(source: &mut R) -> Result<Repo, xml::Error> {
         xml::deserialize(source)
     }
