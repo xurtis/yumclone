@@ -193,15 +193,15 @@ mod test {
         let finder = tag_finder();
         let fields: TagFieldIter = tags().into();
         let variants: BTreeSet<String> = fields
-            .map(|f| finder.replace_all("$os/$arch", f).into_owned())
+            .map(|f| finder.replace_all("$os/$arch/$other", f).into_owned())
             .collect();
 
-        assert!(variants.contains("fedora/SRPMS"));
-        assert!(variants.contains("fedora/x86_64"));
-        assert!(variants.contains("fedora/i686"));
-        assert!(variants.contains("epel/SRPMS"));
-        assert!(variants.contains("epel/x86_64"));
-        assert!(variants.contains("epel/i686"));
+        assert!(variants.contains("fedora/SRPMS/$other"));
+        assert!(variants.contains("fedora/x86_64/$other"));
+        assert!(variants.contains("fedora/i686/$other"));
+        assert!(variants.contains("epel/SRPMS/$other"));
+        assert!(variants.contains("epel/x86_64/$other"));
+        assert!(variants.contains("epel/i686/$other"));
     }
 
     #[test]

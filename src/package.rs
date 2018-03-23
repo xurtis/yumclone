@@ -3,17 +3,102 @@
 use serde_xml_rs as xml;
 use tree_magic as magic;
 use flate2::read::GzDecoder;
-use std::error::Error;
+use reqwest::Client;
 use std::fmt::{self, Debug, Display};
+use std::fs::{OpenOptions, create_dir_all, rename, remove_file};
 use std::iter::Peekable;
-use std::io::Read;
-use serde::Deserialize;
+use std::io::{Read, copy};
+use std::path::Path;
+use url::Url;
+
+use error::*;
 
 /// A collection of package metadata.
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
     #[serde(rename = "package", default)]
     packages: Vec<Package>,
+}
+
+impl Metadata {
+    /// Decode a stream into metadata
+    pub fn decode<R: Read>(source: &mut R) -> Result<Metadata> {
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes)?;
+        Metadata::decode_raw(bytes.as_slice())
+    }
+
+    /// Decode a raw slice of data
+    pub fn decode_raw(source: &[u8]) -> Result<Metadata> {
+        if magic::match_u8("application/gzip", source) {
+            debug!("Metadata is gzip encoded");
+            Ok(xml::deserialize(GzDecoder::new(source))?)
+        } else if magic::match_u8("application/xml", source) {
+            debug!("Metadata is raw xml");
+            Ok(xml::deserialize(source)?)
+        } else {
+            Err(ErrorKind::IncompatiblePrimaryMeta.into())
+        }
+    }
+
+    /// Generate the difference between two metadata collections.
+    pub fn delta<'s>(&'s self, other: &'s Metadata) -> Vec<Delta<'s>> {
+        let start = self.packages();
+        let mut start_iter = start.into_iter().peekable();
+        let end = other.packages();
+        let mut end_iter = end.into_iter().peekable();
+        let mut deltas = Vec::new();
+
+        loop {
+            match (start_iter.peek(), end_iter.peek()) {
+                (Some(_), Some(_)) => {
+                    deltas.push(Metadata::compare_first(&mut start_iter, &mut end_iter))
+                }
+                (Some(_), None) => deltas.push(start_iter.next().unwrap().delete()),
+                (None, Some(_)) => deltas.push(end_iter.next().unwrap().fetch()),
+                (None, None) => break,
+            };
+        }
+
+        deltas.sort_unstable();
+        deltas
+    }
+
+    /// Generate the difference required to download a fresh clone.
+    pub fn fresh_delta<'s>(&'s self) -> Vec<Delta<'s>> {
+        self.packages.iter()
+            .map(Package::fetch)
+            .collect()
+    }
+
+    /// Compare the heads of two iterators to determine an action to take
+    fn compare_first<'s, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta<'s>
+    where
+        I: Iterator<Item = &'s Package>,
+    {
+        let from = start.peek().unwrap().clone();
+        let to = end.peek().unwrap().clone();
+
+        if from.location.href < to.location.href {
+            // Delete packages not found in the destination
+            start.next().unwrap().delete()
+        } else if from.location.href > to.location.href {
+            // Fetch new packages
+            end.next().unwrap().fetch()
+        } else {
+            // Retain unchanged packages
+            end.next().unwrap();
+            start.next().unwrap().retain()
+        }
+    }
+
+    /// Generate a sorted list of packages for the repository.
+    fn packages(&self) -> Vec<&Package> {
+        let mut packages: Vec<&Package> = self.packages.iter().collect();
+
+        packages.sort_unstable();
+        packages
+    }
 }
 
 /// Metadata for a single package.
@@ -34,10 +119,6 @@ impl Package {
         Delta::Delete(self.location())
     }
 
-    fn replace<'s>(&'s self) -> Delta<'s> {
-        Delta::Replace(self.location())
-    }
-
     fn fetch<'s>(&'s self) -> Delta<'s> {
         Delta::Fetch(self.location())
     }
@@ -56,13 +137,17 @@ pub struct Version {
 }
 
 impl Debug for Version {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter)
+        -> ::std::result::Result<(), fmt::Error>
+    {
         write!(f, "ver({}, {}, {})", self.epoch, self.ver, self.rel)
     }
 }
 
 impl Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter)
+        -> ::std::result::Result<(), fmt::Error>
+    {
         write!(f, "{}-{}-{}", self.epoch, self.ver, self.rel)
     }
 }
@@ -88,99 +173,77 @@ struct Checksum {
 pub enum Delta<'r> {
     /// Download a new file at a given location (remote -> local)
     Fetch(&'r str),
-    /// Replace a file at a given location (remote -> local)
-    Replace(&'r str),
     /// Keep the existing copy of the file (local)
     Retain(&'r str),
     /// Delete a file at a given location (local)
     Delete(&'r str),
 }
 
-fn error_string<T, E: Error>(result: Result<T, E>) -> Result<T, String> {
-    result.map_err(|e| e.description().to_string())
+impl<'s> Delta<'s> {
+    /// Perform the action the single delta action to move towards the new mirror revision.
+    pub fn enact(&self, client: &Client, src: &Url, dest: &Path) -> Result<()> {
+        debug!("Enacting: {:?}", self);
+        match *self {
+            Delta::Fetch(package) => {
+                debug!("Fetching '{}'", package);
+                sync_file(client, package, src, dest)
+            }
+            Delta::Retain(package) => {
+                debug!("Retaining '{}'", package);
+                Ok(())
+            }
+            Delta::Delete(package) => {
+                debug!("Deleting '{}'", package);
+                Delta::delete(package, dest)
+            }
+        }
+    }
+
+    fn delete(package: &str, dest: &Path) -> Result<()> {
+        let local_path = dest.join(&package);
+        info!("Deleting {:?}", local_path);
+        remove_file(&local_path)?;
+        Ok(())
+    }
+
+    /// Check if an operation would delete a package.
+    pub fn is_delete(&self) -> bool {
+        match *self {
+            Delta::Delete(_) => true,
+            _ => false,
+        }
+    }
 }
 
-fn deserialize<'de, R: Read, T: Deserialize<'de>>(source: R) -> Result<T, String> {
-    error_string(xml::deserialize(source))
+/// Synchronise a remote file to a local location.
+pub fn sync_file(client: &Client, relative: &str, src: &Url, dest: &Path) -> Result<()> {
+    let remote_path = src.join(&relative)?;
+    let local_path = dest.join(&relative);
+    let temp_path = local_path.with_extension("sync.tmp");
+
+    if local_path.exists() {
+        info!("Skipping (already exists) {:?}", remote_path);
+        return Ok(());
+    }
+
+    info!("Downloading \"{}\" to {:?}", remote_path, local_path);
+
+    create_dir_all(local_path.parent().expect("Invalid repository structure"))?;
+    download(client, remote_path, &temp_path)?;
+    rename(&temp_path, &local_path)?;
+    Ok(())
 }
 
-impl Metadata {
-    /// Decode a stream into metadata
-    pub fn decode<R: Read>(source: &mut R) -> Result<Metadata, String> {
-        let mut bytes = Vec::new();
-        error_string(source.read_to_end(&mut bytes))?;
-        Metadata::decode_raw(bytes.as_slice())
-    }
-
-    /// Decode a raw slice of data
-    pub fn decode_raw(source: &[u8]) -> Result<Metadata, String> {
-        eprintln!("Checking type");
-        if magic::match_u8("application/gzip", source) {
-            eprintln!("Found gzip");
-            deserialize(GzDecoder::new(source))
-        } else if magic::match_u8("application/xml", source) {
-            eprintln!("Found xml");
-            deserialize(source)
-        } else {
-            Err("Incompatible file type".to_string())
-        }
-    }
-
-    /// Generate the difference between two metadata collections.
-    pub fn delta<'s>(&'s self, other: &'s Metadata) -> Vec<Delta<'s>> {
-        let start = self.packages();
-        let mut start_iter = start.into_iter().peekable();
-        let end = other.packages();
-        let mut end_iter = end.into_iter().peekable();
-        let mut deltas = Vec::new();
-
-        loop {
-            match (start_iter.peek(), end_iter.peek()) {
-                (Some(_), Some(_)) => {
-                    deltas.push(Metadata::compare_first(&mut start_iter, &mut end_iter))
-                }
-                (Some(_), None) => deltas.push(start_iter.next().unwrap().delete()),
-                (None, Some(_)) => deltas.push(end_iter.next().unwrap().fetch()),
-                (None, None) => break,
-            };
-        }
-
-        deltas.sort();
-        deltas
-    }
-
-    /// Compare the heads of two iterators to determine an action to take
-    fn compare_first<'s, I>(start: &mut Peekable<I>, end: &mut Peekable<I>) -> Delta<'s>
-    where
-        I: Iterator<Item = &'s Package>,
-    {
-        let from = start.peek().unwrap().clone();
-        let to = end.peek().unwrap().clone();
-
-        if from.location.href < to.location.href {
-            // Delete packages not found in the destination
-            start.next().unwrap().delete()
-        } else if from.location.href > to.location.href {
-            // Fetch new packages
-            end.next().unwrap().fetch()
-        } else if from.checksum != to.checksum {
-            // Replace changed packages
-            start.next().unwrap();
-            end.next().unwrap().replace()
-        } else {
-            // Retain unchanged packages
-            end.next().unwrap();
-            start.next().unwrap().retain()
-        }
-    }
-
-    /// Generate a sorted list of packages for the repository.
-    fn packages(&self) -> Vec<&Package> {
-        let mut packages: Vec<&Package> = self.packages.iter().collect();
-
-        packages.sort_unstable();
-        packages
-    }
+/// Download a network file to a local file
+fn download(client: &Client, src: Url, dest: &Path) -> Result<()> {
+    let mut local = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(dest)?;
+    let mut remote = client.get(src).send()?;
+    copy(&mut remote, &mut local)?;
+    Ok(())
 }
 
 #[cfg(test)]
