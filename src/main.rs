@@ -13,16 +13,58 @@
 
 #![warn(missing_docs)]
 
+extern crate env_logger;
+#[macro_use]
+extern crate error_chain;
 extern crate flate2;
+extern crate loadconf;
+#[macro_use]
+extern crate log;
 extern crate regex;
+extern crate reqwest;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_xml_rs;
+extern crate tempdir;
 extern crate tree_magic;
+extern crate url;
+extern crate url_serde;
 
-mod package;
+use loadconf::Load;
+
+pub mod config;
+pub mod error;
+pub mod package;
 mod repo;
-mod urlmux;
+pub mod urlmux;
 
-fn main() {}
+use config::Config;
+pub use repo::Repo;
+
+#[derive(Debug, Deserialize)]
+struct Configs {
+    repo: Vec<Config>,
+}
+
+impl Default for Configs {
+    fn default() -> Configs {
+        Configs {
+            repo: Vec::default(),
+        }
+    }
+}
+
+fn main() {
+    env_logger::init();
+    let configs: Configs = Load::try_load(env!("CARGO_PKG_NAME"))
+        .expect("Could not load configuration");
+
+    for repo in configs.repo {
+        debug!("Loaded repo: {:?}", repo);
+        if let Err(e) = repo.sync() {
+            panic!("Error synchronising: {}'", e);
+        }
+    }
+}
+

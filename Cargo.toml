@@ -1,13 +1,21 @@
 [package]
 name = "yumclone"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Curtis Millar <curtis@curtism.me>"]
 description = "A tool to clone and synchronise yum repositories."
 
 [dependencies]
-serde-xml-rs = "0.2.1"
-serde = "1.0"
-serde_derive = "1.0"
-tree_magic = "0.2"
+env_logger = "0.5.6"
+error-chain = "0.11.0"
 flate2 = "1.0"
+loadconf = "0.2.0"
+log = "0.4.1"
 regex = "0.2.6"
+reqwest = "0.8.5"
+serde = "1.0"
+serde-xml-rs = "0.2.1"
+serde_derive = "1.0"
+tempdir = "0.3.7"
+tree_magic = "0.2"
+url = "1.7"
+url_serde = "0.2.0"
