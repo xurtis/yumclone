@@ -63,7 +63,10 @@ fn main() {
     for repo in configs.repo {
         debug!("Loaded repo: {:?}", repo);
         if let Err(e) = repo.sync() {
-            panic!("Error synchronising: {}'", e);
+            error!("Error synchronising: {}'", e);
+            if let Some(backtrace) = e.backtrace() {
+                debug!("Error backtrace:\n{:?}", backtrace);
+            }
         }
     }
 }
