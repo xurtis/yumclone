@@ -201,8 +201,10 @@ impl<'s> Delta<'s> {
 
     fn delete(package: &str, dest: &Path) -> Result<()> {
         let local_path = dest.join(&package);
-        info!("Deleting {:?}", local_path);
-        remove_file(&local_path)?;
+        if local_path.exists() {
+            info!("Deleting {:?}", local_path);
+            remove_file(&local_path)?;
+        }
         Ok(())
     }
 
