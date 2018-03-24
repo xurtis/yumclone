@@ -44,14 +44,12 @@ impl Mirror {
 
     /// Load a mirror from a local location.
     pub fn local(path: &str) -> Result<Option<Mirror>> {
-        let current_dir = current_dir()?;
-        let current_dir_str = current_dir
-            .to_str()
+        let local_path = current_dir()?
+            .join(path);
+        let local_path_str = local_path.to_str()
             .ok_or(ErrorKind::CurrentDirDecode)?;
         let url = Url::parse("file:///")?
-            .join(current_dir_str)?
-            .join(path)?;
-
+            .join(local_path_str)?;
 
         let md_path = Path::new(path).join(MD_PATH);
         debug!("Loading local metadata from {:?}", md_path);
