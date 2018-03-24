@@ -106,6 +106,7 @@ impl Cache {
 
     pub fn replace(&self, dest: &Mirror) -> Result<()> {
         let dest_path = Path::new(dest.location.path());
+        debug!("Replacing {:?} with {:?}", dest_path, self.location);
         let remote = self.metadata(self.dir.path())?;
         let local = dest.metadata(dest_path)?;
         self.clone(remote.delta(&local), dest_path)
