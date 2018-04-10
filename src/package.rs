@@ -7,7 +7,7 @@ use reqwest::Client;
 use std::fmt::{self, Debug, Display};
 use std::fs::{OpenOptions, create_dir_all, rename, remove_file};
 use std::iter::Peekable;
-use std::io::{Read, copy};
+use std::io::Read;
 use std::path::Path;
 use url::Url;
 
@@ -244,7 +244,7 @@ fn download(client: &Client, src: Url, dest: &Path) -> Result<()> {
         .truncate(true)
         .open(dest)?;
     let mut remote = client.get(src).send()?;
-    copy(&mut remote, &mut local)?;
+    remote.copy_to(&mut local)?;
     Ok(())
 }
 
