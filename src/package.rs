@@ -9,6 +9,7 @@ use std::fs::{OpenOptions, create_dir_all, rename, remove_file};
 use std::iter::Peekable;
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 use url::Url;
 
 use error::*;
@@ -181,12 +182,12 @@ pub enum Delta<'r> {
 
 impl<'s> Delta<'s> {
     /// Perform the action the single delta action to move towards the new mirror revision.
-    pub fn enact(&self, client: &Client, src: &Url, dest: &Path) -> Result<()> {
+    pub fn enact(&self, src: &Url, dest: &Path) -> Result<()> {
         debug!("Enacting: {:?}", self);
         match *self {
             Delta::Fetch(package) => {
                 debug!("Fetching '{}'", package);
-                sync_file(client, package, src, dest)
+                sync_file(package, src, dest)
             }
             Delta::Retain(package) => {
                 debug!("Retaining '{}'", package);
@@ -218,7 +219,7 @@ impl<'s> Delta<'s> {
 }
 
 /// Synchronise a remote file to a local location.
-pub fn sync_file(client: &Client, relative: &str, src: &Url, dest: &Path) -> Result<()> {
+pub fn sync_file(relative: &str, src: &Url, dest: &Path) -> Result<()> {
     let remote_path = src.join(&relative)?;
     let local_path = dest.join(&relative);
     let temp_path = local_path.with_extension("sync.tmp");
@@ -231,13 +232,16 @@ pub fn sync_file(client: &Client, relative: &str, src: &Url, dest: &Path) -> Res
     info!("Downloading \"{}\" to {:?}", remote_path, local_path);
 
     create_dir_all(local_path.parent().expect("Invalid repository structure"))?;
-    download(client, remote_path, &temp_path)?;
+    download(remote_path, &temp_path)?;
     rename(&temp_path, &local_path)?;
     Ok(())
 }
 
 /// Download a network file to a local file
-fn download(client: &Client, src: Url, dest: &Path) -> Result<()> {
+fn download(src: Url, dest: &Path) -> Result<()> {
+    let client = Client::builder()
+        .timeout(Some(Duration::from_secs(600)))
+        .build()?;
     let mut local = OpenOptions::new()
         .create(true)
         .write(true)

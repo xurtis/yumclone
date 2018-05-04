@@ -111,7 +111,6 @@ impl Cache {
     }
 
     fn clone<'s>(&self, operations: Vec<Delta<'s>>, dest: &Path) -> Result<()> {
-        let client = reqwest::Client::new();
         let mut operations = operations.into_iter().peekable();
 
         // Download fresh and changed packages
@@ -120,7 +119,7 @@ impl Cache {
                 if e.is_delete() {
                     break;
                 } else {
-                    e.enact(&client, &self.location, dest)?;
+                    e.enact(&self.location, dest)?;
                 }
             } else {
                 break;
@@ -133,7 +132,7 @@ impl Cache {
 
         // Delete old packages
         for operation in operations {
-            operation.enact(&client, &self.location, dest)?;
+            operation.enact(&self.location, dest)?;
         }
         Ok(())
     }
@@ -233,9 +232,8 @@ impl Repo {
 
     /// Download the contents of a repo to a given path.
     fn download_meta(&self, src: &Url, dest: &Path) -> Result<()> {
-        let client = reqwest::Client::new();
         for file in self.meta_files() {
-            sync_file(&client, file, src, dest)?;
+            sync_file(file, src, dest)?;
         }
         Ok(())
     }
