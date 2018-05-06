@@ -241,6 +241,7 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path) -> Result<()> {
 fn download(src: Url, dest: &Path) -> Result<()> {
     let client = Client::builder()
         .timeout(Some(Duration::from_secs(600)))
+        .gzip(false)
         .build()?;
     let mut local = OpenOptions::new()
         .create(true)
