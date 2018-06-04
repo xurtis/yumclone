@@ -52,10 +52,10 @@ impl Config {
 
             if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
                 info!("Updating repo in '{}'", dest);
-                if remote.same_version(&local) {
-                    info!("Repository '{}' is up to date", dest);
-                    continue;
-                }
+                // if remote.same_version(&local) {
+                //     info!("Repository '{}' is up to date", dest);
+                //     continue;
+                // }
                 let remote = remote.into_cache()?;
                 remote.replace(&local)?;
             } else {
