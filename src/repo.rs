@@ -18,7 +18,6 @@ pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
 
 /// A mirror of a repository at a particular locaiton.
-#[derive(PartialEq, Eq)]
 pub struct Mirror {
     repo: Repo,
     location: Url,
@@ -63,6 +62,11 @@ impl Mirror {
         File::open(md_path)?.read_to_string(&mut raw)?;
         let repo = Repo::decode(&mut raw.as_bytes())?;
         Ok(Some(Mirror::new(repo, url)))
+    }
+
+    /// Compare the versions of two mirrors.
+    pub fn same_version(&self, other: &Mirror) -> bool {
+        self.repo == other.repo
     }
 
     /// Create a local cache of all metadata.
