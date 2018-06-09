@@ -58,6 +58,7 @@ impl Config {
                 } else {
                     info!("Repository '{}' is up to date", dest);
                 }
+                info!("Cleaning repo in '{}'", dest);
                 local.clean()?;
             } else {
                 info!("Downloading fresh repo from '{}'", src);

@@ -86,6 +86,7 @@ impl Mirror {
     pub fn clean(&self) -> Result<()> {
         let base_path = Path::new(self.location.path());
         let metadata = self.metadata(base_path)?;
+        debug!("Removing extraneous files in '{:?}'", base_path);
 
         let mut files: HashSet<_> = self.repo
             .meta_files()
