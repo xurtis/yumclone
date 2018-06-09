@@ -65,8 +65,6 @@ impl Config {
                 info!("Downloading fresh repo from '{}'", src);
                 let remote = remote.into_cache()?;
                 remote.clone_to(&dest)?;
-                info!("Cleaning repo in '{}'", dest);
-
                 if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
                     info!("Cleaning repo in '{}'", dest);
                     local.clean()?;
