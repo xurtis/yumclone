@@ -18,6 +18,7 @@ pub struct Config {
     #[serde(with = "url_serde")]
     src: Url,
     dest: String,
+    #[serde(default)]
     tags: HashMap<String, Vec<String>>,
 }
 
@@ -65,7 +66,11 @@ impl Config {
                 let remote = remote.into_cache()?;
                 remote.clone_to(&dest)?;
                 info!("Cleaning repo in '{}'", dest);
-                local.clean()?;
+
+                if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
+                    info!("Cleaning repo in '{}'", dest);
+                    local.clean()?;
+                }
             }
         }
 
