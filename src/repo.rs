@@ -103,7 +103,7 @@ impl Mirror {
         for entry in WalkDir::new(base_path) {
             let file = entry?;
             let rel_path = file.path().strip_prefix(base_path)?;
-            if !files.contains(&rel_path) {
+            if !file.path().is_dir() && !files.contains(&rel_path) {
                 let path = base_path.join(rel_path);
                 info!("Removing '{:?}'", path);
             }
