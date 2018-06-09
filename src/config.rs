@@ -58,7 +58,7 @@ impl Config {
                 } else {
                     info!("Repository '{}' is up to date", dest);
                 }
-                local.clean();
+                local.clean()?;
             } else {
                 info!("Downloading fresh repo from '{}'", src);
                 let remote = remote.into_cache()?;
