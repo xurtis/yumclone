@@ -7,6 +7,7 @@ error_chain! {
         Io(::std::io::Error);
         Reqwest(::reqwest::Error);
         Format(::std::fmt::Error);
+        WalkDir(::walkdir::Error);
     }
 
     errors {

@@ -1,15 +1,17 @@
 //! Represetnation of repository metadata.
 
+use std::collections::HashSet;
 use std::env::current_dir;
 use std::fs::{File, read_dir, remove_file, copy, create_dir_all};
 use std::io::Read;
-use std::path::{Path, PathBuf};
 use std::ops::Deref;
+use std::path::{Path, PathBuf};
 
 use reqwest;
 use serde_xml_rs as xml;
 use tempdir::TempDir;
 use url::Url;
+use walkdir::WalkDir;
 
 use error::*;
 use package::{Metadata, Delta, sync_file};
@@ -78,6 +80,36 @@ impl Mirror {
     pub fn metadata(&self, base_path: &Path) -> Result<Metadata> {
         let primary_path = base_path.join(self.repo.primary_path()?);
         Ok(Metadata::decode(&mut File::open(primary_path)?)?)
+    }
+
+    /// Remove all extraneous files.
+    pub fn clean(&self) -> Result<()> {
+        let base_path = Path::new(self.location.path());
+        let metadata = self.metadata(base_path)?;
+
+        let mut files: HashSet<_> = self.repo
+            .meta_files()
+            .into_iter()
+            .map(Path::new)
+            .collect();
+
+
+        let package_files = metadata.package_files();
+
+        for file in package_files {
+            files.insert(Path::new(file));
+        }
+
+        for entry in WalkDir::new(base_path) {
+            let file = entry?;
+            let rel_path = file.path();
+            if !files.contains(&rel_path) {
+                let path = base_path.join(rel_path);
+                info!("Removing '{:?}'", path);
+            }
+        }
+
+        Ok(())
     }
 }
 

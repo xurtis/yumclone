@@ -30,6 +30,7 @@ extern crate tempdir;
 extern crate tree_magic;
 extern crate url;
 extern crate url_serde;
+extern crate walkdir;
 
 use loadconf::Load;
 

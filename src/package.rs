@@ -10,6 +10,7 @@ use std::iter::Peekable;
 use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
+use std::collections::HashSet;
 use url::Url;
 
 use error::*;
@@ -99,6 +100,11 @@ impl Metadata {
 
         packages.sort_unstable();
         packages
+    }
+
+    /// Get a set of all of the package files in a repo.
+    pub fn package_files(&self) -> HashSet<&str> {
+        self.packages().into_iter().map(|p| p.location()).collect()
     }
 }
 
