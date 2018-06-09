@@ -8,6 +8,7 @@ error_chain! {
         Reqwest(::reqwest::Error);
         Format(::std::fmt::Error);
         WalkDir(::walkdir::Error);
+        StripPrefix(::std::path::StripPrefixError);
     }
 
     errors {
