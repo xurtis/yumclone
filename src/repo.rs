@@ -108,6 +108,7 @@ impl Mirror {
             if !file.file_type().is_dir() && !files.contains(&rel_path) {
                 let path = base_path.join(rel_path);
                 info!("Removing '{:?}'", path);
+                remove_file(&path)?;
             }
         }
 
