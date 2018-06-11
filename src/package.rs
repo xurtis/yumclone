@@ -111,9 +111,9 @@ impl Metadata {
 /// Metadata for a single package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct Package {
-    name: String,
     location: Location,
     version: Version,
+    name: String,
     checksum: Checksum,
 }
 
