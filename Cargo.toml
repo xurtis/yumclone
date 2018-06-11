@@ -1,6 +1,6 @@
 [package]
 name = "yumclone"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Curtis Millar <curtis@curtism.me>"]
 description = "A tool to clone and synchronise yum repositories."
 

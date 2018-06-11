@@ -2,12 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::fs::File;
-use reqwest::Client;
 use url::Url;
 use url_serde;
-
-use error_chain::ChainedError;
 
 use error::*;
 use repo::*;
@@ -52,23 +48,18 @@ impl Config {
             let remote = try_load_mirror!(Mirror::remote, &src);
 
             if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
-                info!("Updating repo in '{}'", dest);
-                if !remote.same_version(&local) {
-                    let remote = remote.into_cache()?;
-                    remote.replace(&local)?;
-                    info!("Cleaning repo in '{}'", dest);
-                    local.clean()?;
-                } else {
+                if remote.same_version(&local) {
                     info!("Repository '{}' is up to date", dest);
+                    continue;
                 }
-            } else {
-                info!("Downloading fresh repo from '{}'", src);
-                let remote = remote.into_cache()?;
-                remote.clone_to(&dest)?;
-                if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
-                    info!("Cleaning repo in '{}'", dest);
-                    local.clean()?;
-                }
+            }
+
+            info!("Downloading repo from '{}'", src);
+            let remote = remote.into_cache()?;
+            remote.clone(&Path::new(&dest))?;
+            if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
+                info!("Cleaning repo in '{}'", dest);
+                local.clean()?;
             }
         }
 

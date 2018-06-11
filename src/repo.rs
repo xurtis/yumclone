@@ -14,7 +14,7 @@ use url::Url;
 use walkdir::WalkDir;
 
 use error::*;
-use package::{Metadata, Delta, sync_file};
+use package::{Metadata, sync_file};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
@@ -132,44 +132,10 @@ impl Cache {
         })
     }
 
-    pub fn clone_to(&self, dest: &str) -> Result<()> {
+    pub fn clone(&self, dest: &Path) -> Result<()> {
         let packages = self.metadata(self.dir.path())?;
-        self.clone(packages.fresh_delta(), Path::new(dest))
-    }
-
-    pub fn replace(&self, dest: &Mirror) -> Result<()> {
-        let dest_path = Path::new(dest.location.path());
-        debug!("Replacing {:?} with {:?}", dest_path, self.location);
-        let remote = self.metadata(self.dir.path())?;
-        let local = dest.metadata(dest_path)?;
-        self.clone(remote.delta(&local), dest_path)
-    }
-
-    fn clone<'s>(&self, operations: Vec<Delta<'s>>, dest: &Path) -> Result<()> {
-        let mut operations = operations.into_iter().peekable();
-
-        // Download fresh and changed packages
-        loop {
-            if let Some(e) = operations.peek() {
-                if e.is_delete() {
-                    break;
-                } else {
-                    e.enact(&self.location, dest)?;
-                }
-            } else {
-                break;
-            }
-            operations.next().unwrap();
-        }
-
-        // Replace the metadata
-        self.replace_metadata(dest)?;
-
-        // Delete old packages
-        for operation in operations {
-            operation.enact(&self.location, dest)?;
-        }
-        Ok(())
+        packages.sync_all(&self.mirror.location, dest)?;
+        self.replace_metadata(dest)
     }
 
     fn replace_metadata(&self, dest: &Path) -> Result<()> {
@@ -308,7 +274,7 @@ mod test {
     #[test]
     fn primary_path() {
         let remote = Repo::decode(&mut LOCAL_REPOMD).unwrap();
-        let expected = "repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz";
+        let expected = Path::new("repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz");
 
         assert_eq!(remote.primary_path().unwrap(), expected);
     }

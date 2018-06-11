@@ -1,5 +1,7 @@
 //! Errors generated.
 
+#![allow(missing_docs)]
+
 error_chain! {
     foreign_links {
         Url(::url::ParseError);
