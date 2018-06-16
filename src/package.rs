@@ -138,7 +138,7 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path) -> Result<()> {
     let temp_path = local_path.with_extension("sync.tmp");
 
     if local_path.exists() {
-        info!("Skipping (already exists) {:?}", remote_path);
+        debug!("Skipping (already exists) {:?}", remote_path);
         return Ok(());
     }
 
