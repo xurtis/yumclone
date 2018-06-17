@@ -14,7 +14,7 @@ use url::Url;
 use walkdir::WalkDir;
 
 use error::*;
-use package::{Metadata, sync_file};
+use package::{Fetch, Metadata, PrestoDelta, sync_file};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
@@ -82,10 +82,21 @@ impl Mirror {
         Ok(Metadata::decode(&mut File::open(primary_path)?)?)
     }
 
+    /// Get the listing of deltas.
+    pub fn prestodelta(&self, base_path: &Path) -> Result<Option<PrestoDelta>> {
+        if let Some(prestodelta_path) = self.repo.prestodelta_path() {
+            let prestodelta_path = base_path.join(prestodelta_path);
+            Ok(Some(PrestoDelta::decode(&mut File::open(prestodelta_path)?)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Remove all extraneous files.
     pub fn clean(&self) -> Result<()> {
         let base_path = Path::new(self.location.path());
         let metadata = self.metadata(base_path)?;
+        let prestodelta = self.prestodelta(base_path)?;
         debug!("Removing extraneous files in '{:?}'", base_path);
 
         let mut files: HashSet<_> = self.repo
@@ -95,10 +106,16 @@ impl Mirror {
             .collect();
 
 
-        let package_files = metadata.package_files();
+        let package_files = metadata.files();
 
         for file in package_files {
             files.insert(Path::new(file));
+        }
+
+        if let Some(deltas) = &prestodelta {
+            for file in deltas.files() {
+                files.insert(Path::new(file));
+            }
         }
 
         for entry in WalkDir::new(base_path) {
@@ -135,6 +152,9 @@ impl Cache {
     pub fn clone(&self, dest: &Path) -> Result<()> {
         let packages = self.metadata(self.dir.path())?;
         packages.sync_all(&self.mirror.location, dest)?;
+        if let Some(deltas) = self.prestodelta(self.dir.path())? {
+            deltas.sync_all(&self.mirror.location, dest)?;
+        }
         self.replace_metadata(dest)
     }
 
@@ -214,15 +234,26 @@ impl Repo {
 
     /// Returns the relative path of the primary data file.
     pub fn primary_path(&self) -> Result<PathBuf> {
+        self.subsection_path("primary")
+            .ok_or(ErrorKind::NoPrimaryMeta.into())
+    }
+
+    /// Returns the relative path of the prestodelta data file.
+    pub fn prestodelta_path(&self) -> Option<PathBuf> {
+        self.subsection_path("prestodelta")
+    }
+
+    /// Get the path of a repository subsection.
+    pub fn subsection_path(&self, section: &str) -> Option<PathBuf> {
         for datum in &self.data {
-            if datum.datum == "primary" {
+            if datum.datum == section {
                 let mut path = PathBuf::new();
                 path.push(&datum.location.href);
-                return Ok(path);
+                return Some(path);
             }
         }
 
-        Err(ErrorKind::NoPrimaryMeta.into())
+        None
     }
 
     /// Download the contents of a repo to a given path.

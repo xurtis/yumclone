@@ -1,6 +1,7 @@
 //! Representation of package metadata from a YUM repository.
 
 use serde_xml_rs as xml;
+use serde::de::DeserializeOwned;
 use tree_magic as magic;
 use flate2::read::GzDecoder;
 use reqwest::Client;
@@ -14,23 +15,20 @@ use url::Url;
 
 use error::*;
 
-/// A collection of package metadata.
-#[derive(Debug, Deserialize)]
-pub struct Metadata {
-    #[serde(rename = "package", default)]
-    packages: Vec<Package>,
-}
+/// A set of files that can be loaded from XML and fetched.
+pub trait Fetch: DeserializeOwned {
+    /// Generate a sorted list of packages for the repository.
+    fn files(&self) -> HashSet<&str>;
 
-impl Metadata {
     /// Decode a stream into metadata
-    pub fn decode<R: Read>(source: &mut R) -> Result<Metadata> {
+    fn decode<R: Read>(source: &mut R) -> Result<Self> {
         let mut bytes = Vec::new();
         source.read_to_end(&mut bytes)?;
-        Metadata::decode_raw(bytes.as_slice())
+        Self::decode_raw(bytes.as_slice())
     }
 
     /// Decode a raw slice of data
-    pub fn decode_raw(source: &[u8]) -> Result<Metadata> {
+    fn decode_raw(source: &[u8]) -> Result<Self> {
         if magic::match_u8("application/gzip", source) {
             debug!("Metadata is gzip encoded");
             Ok(xml::deserialize(GzDecoder::new(source))?)
@@ -42,26 +40,36 @@ impl Metadata {
         }
     }
 
+    /// Download all files to destination.
+    fn sync_all(&self, src: &Url, dest: &Path) -> Result<()> {
+        for file in self.files() {
+            sync_file(file, src, dest)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// A collection of package metadata.
+#[derive(Debug, Deserialize)]
+pub struct Metadata {
+    #[serde(rename = "package", default)]
+    packages: Vec<Package>,
+}
+
+impl Fetch for Metadata {
+    fn files(&self) -> HashSet<&str> {
+        self.packages().into_iter().map(|p| p.location()).collect()
+    }
+}
+
+impl Metadata {
     /// Generate a sorted list of packages for the repository.
     fn packages(&self) -> Vec<&Package> {
         let mut packages: Vec<&Package> = self.packages.iter().collect();
 
         packages.sort_unstable();
         packages
-    }
-
-    /// Get a set of all of the package files in a repo.
-    pub fn package_files(&self) -> HashSet<&str> {
-        self.packages().into_iter().map(|p| p.location()).collect()
-    }
-
-    /// Download all files to destination.
-    pub fn sync_all(&self, src: &Url, dest: &Path) -> Result<()> {
-        for package in self.packages() {
-            sync_file(package.location(), src, dest)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -104,6 +112,39 @@ impl Display for Version {
     }
 }
 
+/// A collection of delta files.
+#[derive(Debug, Deserialize)]
+pub struct PrestoDelta {
+    #[serde(rename = "newpackage", default)]
+    new_packages: Vec<NewPackage>,
+}
+
+impl Fetch for PrestoDelta {
+    fn files(&self) -> HashSet<&str> {
+        self.new_packages.iter()
+            .fold(HashSet::new(), |set, new_package| {
+                new_package.deltas.iter().fold(set, |mut set, delta| {
+                    set.insert(delta.filename.as_ref());
+                    set
+                })
+            })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct NewPackage {
+    name: String,
+    version: String,
+    #[serde(rename = "delta", default)]
+    deltas: Vec<Delta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Delta {
+    filename: String,
+    checksum: Checksum,
+}
+
 /// Location information for a package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 struct Location {
@@ -117,18 +158,6 @@ struct Checksum {
     algorithm: String,
     #[serde(rename = "$value")]
     sum: String,
-}
-
-/// For the file at the given path relative to the repository root,
-/// what action should be taken to advance the syncronisation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-enum Delta<'r> {
-    /// Download a new file at a given location (remote -> local)
-    Fetch(&'r str),
-    /// Keep the existing copy of the file (local)
-    Retain(&'r str),
-    /// Delete a file at a given location (local)
-    Delete(&'r str),
 }
 
 /// Synchronise a remote file to a local location.
