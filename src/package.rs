@@ -5,23 +5,25 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tree_magic as magic;
 use flate2::read::GzDecoder;
+use hex;
 use log::{debug, info};
+use openssl::hash::{Hasher, MessageDigest};
 use reqwest::Client;
 use std::fmt::{self, Debug, Display};
-use std::fs::{OpenOptions, create_dir_all, rename};
+use std::fs::{File, OpenOptions, create_dir_all, rename};
 use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use url::Url;
 
-use failure::format_err;
+use failure::{format_err, bail};
 type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 /// A set of files that can be loaded from XML and fetched.
 pub trait Fetch: DeserializeOwned {
     /// Generate a sorted list of packages for the repository.
-    fn files(&self) -> HashSet<&str>;
+    fn files(&self) -> BTreeSet<(&str, &Checksum)>;
 
     /// Decode a stream into metadata
     fn decode<R: Read>(source: &mut R) -> Result<Self> {
@@ -44,9 +46,10 @@ pub trait Fetch: DeserializeOwned {
     }
 
     /// Download all files to destination.
-    fn sync_all(&self, src: &Url, dest: &Path) -> Result<()> {
-        for file in self.files() {
-            sync_file(file, src, dest)?;
+    fn sync_all(&self, src: &Url, dest: &Path, check: bool) -> Result<()> {
+        for (file, checksum) in self.files() {
+            let checksum = if check { Some(checksum) } else { None };
+            sync_file(file, src, dest, checksum)?;
         }
 
         Ok(())
@@ -61,8 +64,8 @@ pub struct Metadata {
 }
 
 impl Fetch for Metadata {
-    fn files(&self) -> HashSet<&str> {
-        self.packages().into_iter().map(|p| p.location()).collect()
+    fn files(&self) -> BTreeSet<(&str, &Checksum)> {
+        self.packages().into_iter().map(|p| (p.location(), &p.checksum)).collect()
     }
 }
 
@@ -123,11 +126,11 @@ pub struct PrestoDelta {
 }
 
 impl Fetch for PrestoDelta {
-    fn files(&self) -> HashSet<&str> {
+    fn files(&self) -> BTreeSet<(&str, &Checksum)> {
         self.new_packages.iter()
-            .fold(HashSet::new(), |set, new_package| {
+            .fold(BTreeSet::new(), |set, new_package| {
                 new_package.deltas.iter().fold(set, |mut set, delta| {
-                    set.insert(delta.filename.as_ref());
+                    set.insert((delta.filename.as_ref(), &delta.checksum));
                     set
                 })
             })
@@ -156,28 +159,76 @@ struct Location {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-struct Checksum {
+pub struct Checksum {
     #[serde(rename = "type")]
     algorithm: String,
     #[serde(rename = "$value")]
     sum: String,
 }
 
+impl Checksum {
+    fn check(&self, path: impl AsRef<Path>) -> Result<bool> {
+        let digest = match self.algorithm.as_str() {
+            "md5" => MessageDigest::md5(),
+            "sha1" => MessageDigest::sha1(),
+            "sha224" => MessageDigest::sha224(),
+            "sha256" => MessageDigest::sha256(),
+            "sha384" => MessageDigest::sha384(),
+            "sha512" => MessageDigest::sha512(),
+            "ripemd160" => MessageDigest::ripemd160(),
+            unknown => bail!("Unknown checksum alogorithm: {}", unknown),
+        };
+
+        let mut hasher = Hasher::new(digest)?;
+
+        let mut file = File::open(path)?;
+        let mut block = [0; 4096];
+
+        loop {
+            let bytes_read = file.read(&mut block)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            hasher.update(&block[0..bytes_read])?;
+        }
+
+        let sum_bytes = hasher.finish()?;
+        let sum = hex::encode(&sum_bytes);
+
+        Ok(sum == self.sum)
+    }
+}
+
 /// Synchronise a remote file to a local location.
-pub fn sync_file(relative: &str, src: &Url, dest: &Path) -> Result<()> {
+pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Checksum>) -> Result<()> {
     let remote_path = src.join(&relative)?;
     let local_path = dest.join(&relative);
     let temp_path = local_path.with_extension("sync.tmp");
 
     if local_path.exists() {
-        debug!("Skipping (already exists) {:?}", remote_path);
-        return Ok(());
+        if let Some(checksum) = checksum {
+            if checksum.check(&local_path)? {
+                debug!("Skipping (already exists with valid checksum) {:?}", remote_path);
+                return Ok(());
+            } else {
+                debug!("Local file failed checksum {:?}", local_path);
+            }
+        } else {
+            debug!("Skipping (already exists) {:?}", remote_path);
+            return Ok(());
+        }
     }
 
     info!("Downloading \"{}\" to {:?}", remote_path, local_path);
 
     create_dir_all(local_path.parent().expect("Invalid repository structure"))?;
     download(remote_path, &temp_path)?;
+    if let Some(checksum) = checksum {
+        if !checksum.check(&temp_path)? {
+            bail!("Remote file failed checksum {:?}", temp_path);
+        }
+    }
     rename(&temp_path, &local_path)?;
     Ok(())
 }

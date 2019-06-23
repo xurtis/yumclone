@@ -113,12 +113,12 @@ impl Mirror {
 
         let package_files = metadata.files();
 
-        for file in package_files {
+        for (file, _) in package_files {
             files.insert(Path::new(file));
         }
 
         if let Some(deltas) = &prestodelta {
-            for file in deltas.files() {
+            for (file, _) in deltas.files() {
                 files.insert(Path::new(file));
             }
         }
@@ -154,11 +154,11 @@ impl Cache {
         })
     }
 
-    pub fn clone(&self, dest: &Path) -> Result<()> {
+    pub fn clone(&self, dest: &Path, check: bool) -> Result<()> {
         let packages = self.metadata(self.dir.path())?;
-        packages.sync_all(&self.mirror.location, dest)?;
+        packages.sync_all(&self.mirror.location, dest, check)?;
         if let Some(deltas) = self.prestodelta(self.dir.path())? {
-            deltas.sync_all(&self.mirror.location, dest)?;
+            deltas.sync_all(&self.mirror.location, dest, check)?;
         }
         self.replace_metadata(dest)
     }
@@ -275,7 +275,7 @@ impl Repo {
     /// Download the contents of a repo to a given path.
     fn download_meta(&self, src: &Url, dest: &Path) -> Result<()> {
         for file in self.meta_files() {
-            sync_file(file, src, dest)?;
+            sync_file(file, src, dest, None)?;
         }
         Ok(())
     }

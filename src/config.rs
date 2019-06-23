@@ -35,7 +35,7 @@ macro_rules! try_load_mirror {
 }
 
 impl Config {
-    pub fn sync(&self) -> Result<()>{
+    pub fn sync(&self, check: bool) -> Result<()>{
         let url_pairs = UrlMux::new(
             self.src.as_str(),
             &self.dest,
@@ -48,7 +48,7 @@ impl Config {
             let remote = try_load_mirror!(Mirror::remote, &src);
 
             if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
-                if remote.same_version(&local) {
+                if remote.same_version(&local) && !check {
                     info!("Repository '{}' is up to date", dest);
                     continue;
                 }
@@ -56,7 +56,7 @@ impl Config {
 
             info!("Downloading repo from '{}'", src);
             let remote = remote.into_cache()?;
-            remote.clone(&Path::new(&dest))?;
+            remote.clone(&Path::new(&dest), check)?;
             if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
                 info!("Cleaning repo in '{}'", dest);
                 local.clean()?;
