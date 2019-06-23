@@ -197,7 +197,7 @@ fn download(src: Url, dest: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{Metadata, Delta};
+    use super::{Metadata, Fetch};
 
     const LOCAL_XML: &[u8] = include_bytes!(
         "test-data/local/repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz"
