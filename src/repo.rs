@@ -5,6 +5,7 @@ use std::env::current_dir;
 use std::fs::{File, read_dir, remove_file, copy, create_dir_all};
 use std::io::Read;
 use std::ops::Deref;
+use std::cmp::PartialEq;
 use std::path::{Path, PathBuf};
 
 use reqwest;
@@ -197,11 +198,22 @@ impl Deref for Cache {
 
 
 /// Representation of a whole repository.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Eq, Deserialize)]
 pub struct Repo {
-    revision: u64,
+    #[serde(default)]
+    revision: Option<u64>,
     #[serde(default)]
     data: Vec<Data>,
+}
+
+impl PartialEq for Repo {
+    fn eq(&self, other: &Self) -> bool {
+        if let (Some(this), Some(that)) = (self.revision, other.revision) {
+            this == that
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
