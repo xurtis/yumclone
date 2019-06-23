@@ -8,7 +8,8 @@ use log::{debug, warn, info};
 
 use crate::repo::*;
 use crate::urlmux::*;
-use crate::error::*;
+
+type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -23,9 +24,7 @@ macro_rules! try_load_mirror {
     ($fn:path, $url:expr) => {
         match $fn($url) {
             Err(e) => {
-                if let Some(backtrace) = e.backtrace() {
-                    debug!("Error Backtrace:\n{:?}", backtrace);
-                }
+                debug!("Error Backtrace:\n{:?}", e.backtrace());
                 warn!("Error: {}", e);
                 warn!("Could not load '{}' (skipping)", $url);
                 continue;

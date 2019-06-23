@@ -18,7 +18,6 @@ use log::{debug, error};
 use serde::Deserialize;
 
 pub mod config;
-pub mod error;
 pub mod package;
 mod repo;
 pub mod urlmux;
@@ -48,9 +47,7 @@ fn main() {
         debug!("Loaded repo: {:?}", repo);
         if let Err(e) = repo.sync() {
             error!("Error synchronising: {}'", e);
-            if let Some(backtrace) = e.backtrace() {
-                debug!("Error backtrace:\n{:?}", backtrace);
-            }
+            debug!("Error backtrace:\n{:?}", e.backtrace());
         }
     }
 }

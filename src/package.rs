@@ -15,7 +15,8 @@ use std::time::Duration;
 use std::collections::HashSet;
 use url::Url;
 
-use crate::error::*;
+use failure::format_err;
+type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 /// A set of files that can be loaded from XML and fetched.
 pub trait Fetch: DeserializeOwned {
@@ -38,7 +39,7 @@ pub trait Fetch: DeserializeOwned {
             debug!("Metadata is raw xml");
             Ok(xml::deserialize(source)?)
         } else {
-            Err(ErrorKind::IncompatiblePrimaryMeta.into())
+            Err(format_err!("Primary metadata in incompatible filetype"))
         }
     }
 

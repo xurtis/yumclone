@@ -15,12 +15,14 @@ use tempdir::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 use log::{debug, info};
+use failure::format_err;
 
-use crate::error::*;
 use crate::package::{Fetch, Metadata, PrestoDelta, sync_file};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
+
+type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 /// A mirror of a repository at a particular locaiton.
 pub struct Mirror {
@@ -52,7 +54,7 @@ impl Mirror {
         let local_path = current_dir()?
             .join(path);
         let local_path_str = local_path.to_str()
-            .ok_or(ErrorKind::CurrentDirDecode)?;
+            .ok_or(format_err!("Couldn't decode directory: {}", path))?;
         let url = Url::parse("file:///")?
             .join(local_path_str)?;
 
@@ -249,7 +251,7 @@ impl Repo {
     /// Returns the relative path of the primary data file.
     pub fn primary_path(&self) -> Result<PathBuf> {
         self.subsection_path("primary")
-            .ok_or(ErrorKind::NoPrimaryMeta.into())
+            .ok_or(format_err!("No primary metadata found"))
     }
 
     /// Returns the relative path of the prestodelta data file.
