@@ -13,24 +13,24 @@
 
 #![warn(missing_docs)]
 
-extern crate env_logger;
+use env_logger;
 #[macro_use]
 extern crate error_chain;
-extern crate flate2;
-extern crate loadconf;
+
+
 #[macro_use]
 extern crate log;
-extern crate regex;
-extern crate reqwest;
-extern crate serde;
+
+
+
 #[macro_use]
 extern crate serde_derive;
-extern crate serde_xml_rs;
-extern crate tempdir;
-extern crate tree_magic;
-extern crate url;
-extern crate url_serde;
-extern crate walkdir;
+
+
+
+
+
+
 
 use loadconf::Load;
 

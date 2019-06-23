@@ -75,7 +75,7 @@ impl<'s> From<&'s TagField> for TagFieldIter<'s> {
 
 impl<'s> From<HashMap<&'s str, Vec<&'s str>>> for TagFieldIter<'s> {
     /// Create an iterator over the tag field.
-    fn from(mut field: HashMap<&'s str, Vec<&'s str>>) -> TagFieldIter {
+    fn from(mut field: HashMap<&'s str, Vec<&'s str>>) -> TagFieldIter<'_> {
         let index = vec![0; field.len()];
         let field = field
             .drain()
@@ -142,7 +142,7 @@ impl<'s> From<HashMap<&'s str, &'s str>> for TagSet<'s> {
 }
 
 impl<'t, 's> Replacer for &'t TagSet<'s> {
-    fn replace_append(&mut self, caps: &Captures, dst: &mut String) {
+    fn replace_append(&mut self, caps: &Captures<'_>, dst: &mut String) {
         if let Some(ref val) = self.map.get(&caps["tag"]) {
             dst.push_str(val);
         } else {
@@ -152,7 +152,7 @@ impl<'t, 's> Replacer for &'t TagSet<'s> {
 }
 
 impl<'s> Replacer for TagSet<'s> {
-    fn replace_append(&mut self, caps: &Captures, dst: &mut String) {
+    fn replace_append(&mut self, caps: &Captures<'_>, dst: &mut String) {
         if let Some(ref val) = self.map.get(&caps["tag"]) {
             dst.push_str(val);
         } else {
@@ -181,7 +181,7 @@ mod test {
 
     #[test]
     fn create_tag_field() {
-        let fields: TagFieldIter = tags().into();
+        let fields: TagFieldIter<'_> = tags().into();
         let sets: Vec<_> = fields.collect();
         assert_eq!(sets.len(), 6);
     }
@@ -191,7 +191,7 @@ mod test {
         use std::collections::BTreeSet;
 
         let finder = tag_finder();
-        let fields: TagFieldIter = tags().into();
+        let fields: TagFieldIter<'_> = tags().into();
         let variants: BTreeSet<String> = fields
             .map(|f| finder.replace_all("$os/$arch/$other", f).into_owned())
             .collect();

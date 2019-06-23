@@ -3,6 +3,7 @@ name = "yumclone"
 version = "0.3.0"
 authors = ["Curtis Millar <curtis@curtism.me>"]
 description = "A tool to clone and synchronise yum repositories."
+edition = "2018"
 
 [dependencies]
 env_logger = "0.5.6"

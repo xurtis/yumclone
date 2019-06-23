@@ -97,7 +97,7 @@ pub struct Version {
 }
 
 impl Debug for Version {
-    fn fmt(&self, f: &mut fmt::Formatter)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>)
         -> ::std::result::Result<(), fmt::Error>
     {
         write!(f, "ver({}, {}, {})", self.epoch, self.ver, self.rel)
@@ -105,7 +105,7 @@ impl Debug for Version {
 }
 
 impl Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>)
         -> ::std::result::Result<(), fmt::Error>
     {
         write!(f, "{}-{}-{}", self.epoch, self.ver, self.rel)
