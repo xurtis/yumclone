@@ -40,8 +40,8 @@ pub mod package;
 mod repo;
 pub mod urlmux;
 
-use config::Config;
-pub use repo::Repo;
+use crate::config::Config;
+pub use crate::repo::Repo;
 
 #[derive(Debug, Deserialize)]
 struct Configs {

@@ -5,9 +5,9 @@ use std::path::Path;
 use url::Url;
 use url_serde;
 
-use error::*;
-use repo::*;
-use urlmux::*;
+use crate::error::*;
+use crate::repo::*;
+use crate::urlmux::*;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {

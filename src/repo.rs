@@ -14,8 +14,8 @@ use tempdir::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
-use error::*;
-use package::{Fetch, Metadata, PrestoDelta, sync_file};
+use crate::error::*;
+use crate::package::{Fetch, Metadata, PrestoDelta, sync_file};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";

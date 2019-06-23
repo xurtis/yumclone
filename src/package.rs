@@ -13,7 +13,7 @@ use std::time::Duration;
 use std::collections::HashSet;
 use url::Url;
 
-use error::*;
+use crate::error::*;
 
 /// A set of files that can be loaded from XML and fetched.
 pub trait Fetch: DeserializeOwned {
