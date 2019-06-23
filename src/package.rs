@@ -208,6 +208,7 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Check
 
     if local_path.exists() {
         if let Some(checksum) = checksum {
+            info!("Verifying checksum of {:?}", local_path);
             if checksum.check(&local_path)? {
                 debug!("Skipping (already exists with valid checksum) {:?}", remote_path);
                 return Ok(());
@@ -223,8 +224,9 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Check
     info!("Downloading \"{}\" to {:?}", remote_path, local_path);
 
     create_dir_all(local_path.parent().expect("Invalid repository structure"))?;
-    download(remote_path, &temp_path)?;
+    download(&remote_path, &temp_path)?;
     if let Some(checksum) = checksum {
+        info!("Verifying checksum of {:?}", remote_path);
         if !checksum.check(&temp_path)? {
             bail!("Remote file failed checksum {:?}", temp_path);
         }
@@ -234,7 +236,7 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Check
 }
 
 /// Download a network file to a local file
-fn download(src: Url, dest: &Path) -> Result<()> {
+fn download(src: &Url, dest: &Path) -> Result<()> {
     let client = Client::builder()
         .timeout(Some(Duration::from_secs(600)))
         .gzip(false)
@@ -244,7 +246,7 @@ fn download(src: Url, dest: &Path) -> Result<()> {
         .write(true)
         .truncate(true)
         .open(dest)?;
-    let mut remote = client.get(src).send()?;
+    let mut remote = client.get(src.clone()).send()?;
     remote.copy_to(&mut local)?;
     Ok(())
 }
