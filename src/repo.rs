@@ -10,9 +10,11 @@ use std::path::{Path, PathBuf};
 
 use reqwest;
 use serde_xml_rs as xml;
+use serde::*;
 use tempdir::TempDir;
 use url::Url;
 use walkdir::WalkDir;
+use log::{debug, info};
 
 use crate::error::*;
 use crate::package::{Fetch, Metadata, PrestoDelta, sync_file};

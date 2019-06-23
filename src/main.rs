@@ -13,26 +13,9 @@
 
 #![warn(missing_docs)]
 
-use env_logger;
-#[macro_use]
-extern crate error_chain;
-
-
-#[macro_use]
-extern crate log;
-
-
-
-#[macro_use]
-extern crate serde_derive;
-
-
-
-
-
-
-
 use loadconf::Load;
+use log::{debug, error};
+use serde::Deserialize;
 
 pub mod config;
 pub mod error;

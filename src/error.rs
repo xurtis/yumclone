@@ -2,6 +2,8 @@
 
 #![allow(missing_docs)]
 
+use error_chain::*;
+
 error_chain! {
     foreign_links {
         Url(::url::ParseError);

@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 use url::Url;
-use url_serde;
+use serde::Deserialize;
+use log::{debug, warn, info};
 
-use crate::error::*;
 use crate::repo::*;
 use crate::urlmux::*;
+use crate::error::*;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {

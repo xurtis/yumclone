@@ -1,9 +1,11 @@
 //! Representation of package metadata from a YUM repository.
 
 use serde_xml_rs as xml;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tree_magic as magic;
 use flate2::read::GzDecoder;
+use log::{debug, info};
 use reqwest::Client;
 use std::fmt::{self, Debug, Display};
 use std::fs::{OpenOptions, create_dir_all, rename};
