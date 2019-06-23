@@ -8,6 +8,7 @@ use flate2::read::GzDecoder;
 use hex;
 use log::{debug, info};
 use openssl::hash::{Hasher, MessageDigest};
+use rayon::prelude::*;
 use reqwest::Client;
 use std::fmt::{self, Debug, Display};
 use std::fs::{File, OpenOptions, create_dir_all, rename};
@@ -47,10 +48,10 @@ pub trait Fetch: DeserializeOwned {
 
     /// Download all files to destination.
     fn sync_all(&self, src: &Url, dest: &Path, check: bool) -> Result<()> {
-        for (file, checksum) in self.files() {
+        self.files().into_par_iter().try_for_each(|(file, checksum)| {
             let checksum = if check { Some(checksum) } else { None };
-            sync_file(file, src, dest, checksum)?;
-        }
+            sync_file(file, src, dest, checksum)
+        })?;
 
         Ok(())
     }
