@@ -183,7 +183,7 @@ impl Checksum {
         let mut hasher = Hasher::new(digest)?;
 
         let mut file = File::open(path)?;
-        let mut block = [0; 4096];
+        let mut block = vec![0; 1024 * 1024 * 8];
 
         loop {
             let bytes_read = file.read(&mut block)?;
