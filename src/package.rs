@@ -12,6 +12,7 @@ use reqwest::{Client, Url};
 use std::fmt::{self, Debug, Display};
 use tokio::fs::{File, OpenOptions, rename, create_dir_all};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc::unbounded_channel;
 use std::path::Path;
 use std::collections::BTreeSet;
 use std::marker::Unpin;
@@ -255,16 +256,39 @@ pub async fn sync_file(
 
 /// Download a network file to a local file
 async fn download(client: &Client, src: &Url, dest: &Path) -> Result<()> {
-    let mut src = client.get(src.clone()).send().await?;
-    let mut local = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(dest)
-        .await?;
-    while let Some(chunk) = src.chunk().await? {
-        local.write_all(&chunk[..]).await?;
-    }
+    let src = src.to_owned();
+    let request = client.get(src);
+    let dest = dest.to_owned();
+    let (tx, mut rx) = unbounded_channel();
+
+    let network: tokio::task::JoinHandle<Result<()>> = tokio::spawn(async move {
+        let mut src = request.send().await?;
+
+        while let Some(chunk) = src.chunk().await? {
+            tx.send(chunk)?;
+        }
+
+        Ok(())
+    });
+
+    let disk: tokio::task::JoinHandle<Result<()>> = tokio::spawn(async move {
+        let mut local = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dest)
+            .await?;
+
+        while let Some(chunk) = rx.recv().await {
+            local.write_all(&chunk[..]).await?;
+        }
+
+        Ok(())
+    });
+
+    disk.await??;
+    network.await??;
+
     Ok(())
 }
 
