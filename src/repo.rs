@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::env::current_dir;
-use tokio::fs::{File, read_dir, remove_file, create_dir_all};
+use tokio::fs::{File, OpenOptions, read_dir, remove_file, create_dir_all};
 use tokio::io::{AsyncRead, AsyncReadExt, copy};
 use std::ops::Deref;
 use std::cmp::PartialEq;
@@ -145,6 +145,7 @@ pub struct Cache {
 impl Cache {
     async fn new(client: &Client, mirror: Mirror) -> Result<Cache> {
         let cache_dir = TempDir::new(env!("CARGO_PKG_NAME"))?;
+        debug!("Caching metadata in {}", cache_dir.path().to_str().unwrap());
         mirror.repo.download_meta(client, &mirror.location, cache_dir.path()).await?;
 
         Ok(Cache {
@@ -187,7 +188,12 @@ impl Cache {
             let dest = target_meta_dir.join(src.file_name().unwrap());
             debug!("Copying {:?} to {:?}", src, dest);
             let mut src = File::open(src).await?;
-            let mut dest = File::open(dest).await?;
+            let mut dest = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(dest)
+                .await?;
             copy(&mut src, &mut dest).await?;
         }
 
