@@ -2,22 +2,22 @@
 
 use std::collections::HashSet;
 use std::env::current_dir;
-use std::fs::{File, read_dir, remove_file, copy, create_dir_all};
-use std::io::Read;
+use tokio::fs::{File, read_dir, remove_file, create_dir_all};
+use tokio::io::{AsyncRead, AsyncReadExt, copy};
 use std::ops::Deref;
 use std::cmp::PartialEq;
 use std::path::{Path, PathBuf};
+use std::marker::Unpin;
 
-use reqwest;
+use reqwest::{Client, Url};
 use serde_xml_rs as xml;
 use serde::*;
 use tempdir::TempDir;
-use url::Url;
 use walkdir::WalkDir;
 use log::{debug, info};
 use failure::format_err;
 
-use crate::package::{Fetch, Metadata, PrestoDelta, sync_file};
+use crate::package::{Fetch, Metadata, PrestoDelta, sync_file, sync_all, decode};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
@@ -39,18 +39,17 @@ impl Mirror {
     }
 
     /// Download a mirror metadata from a remote location.
-    pub fn remote(url: &str) -> Result<Mirror> {
+    pub async fn remote(client: &Client, url: &str) -> Result<Mirror> {
         let md_url = Url::parse(url)?.join(MD_PATH)?;
         debug!("Loading remote metadata from '{}'", md_url);
-        let mut raw = String::new();
-        reqwest::get(md_url)?.read_to_string(&mut raw)?;
-        let repo = Repo::decode(&mut raw.as_bytes())?;
+        let raw = client.get(md_url).send().await?.text().await?;
+        let repo = Repo::decode(&mut raw.as_bytes()).await?;
 
         Ok(Mirror::new(repo, Url::parse(url)?))
     }
 
     /// Load a mirror from a local location.
-    pub fn local(path: &str) -> Result<Option<Mirror>> {
+    pub async fn local(path: &str) -> Result<Option<Mirror>> {
         let local_path = current_dir()?
             .join(path);
         let local_path_str = local_path.to_str()
@@ -66,8 +65,8 @@ impl Mirror {
         }
 
         let mut raw = String::new();
-        File::open(md_path)?.read_to_string(&mut raw)?;
-        let repo = Repo::decode(&mut raw.as_bytes())?;
+        File::open(md_path).await?.read_to_string(&mut raw).await?;
+        let repo = Repo::decode(&mut raw.as_bytes()).await?;
         Ok(Some(Mirror::new(repo, url)))
     }
 
@@ -77,31 +76,31 @@ impl Mirror {
     }
 
     /// Create a local cache of all metadata.
-    pub fn into_cache(self) -> Result<Cache> {
-        Cache::new(self)
+    pub async fn into_cache(self, client: &Client) -> Result<Cache> {
+        Cache::new(client, self).await
     }
 
     /// Get the package listing for the cached repository.
-    pub fn metadata(&self, base_path: &Path) -> Result<Metadata> {
+    pub async fn metadata(&self, base_path: &Path) -> Result<Metadata> {
         let primary_path = base_path.join(self.repo.primary_path()?);
-        Ok(Metadata::decode(&mut File::open(primary_path)?)?)
+        Ok(decode(&mut File::open(primary_path).await?).await?)
     }
 
     /// Get the listing of deltas.
-    pub fn prestodelta(&self, base_path: &Path) -> Result<Option<PrestoDelta>> {
+    pub async fn prestodelta(&self, base_path: &Path) -> Result<Option<PrestoDelta>> {
         if let Some(prestodelta_path) = self.repo.prestodelta_path() {
             let prestodelta_path = base_path.join(prestodelta_path);
-            Ok(Some(PrestoDelta::decode(&mut File::open(prestodelta_path)?)?))
+            Ok(Some(decode(&mut File::open(prestodelta_path).await?).await?))
         } else {
             Ok(None)
         }
     }
 
     /// Remove all extraneous files.
-    pub fn clean(&self) -> Result<()> {
+    pub async fn clean(&self) -> Result<()> {
         let base_path = Path::new(self.location.path());
-        let metadata = self.metadata(base_path)?;
-        let prestodelta = self.prestodelta(base_path)?;
+        let metadata = self.metadata(base_path).await?;
+        let prestodelta = self.prestodelta(base_path).await?;
         debug!("Removing extraneous files in '{:?}'", base_path);
 
         let mut files: HashSet<_> = self.repo
@@ -130,7 +129,7 @@ impl Mirror {
             if !file.file_type().is_dir() && !files.contains(&rel_path) {
                 let path = base_path.join(rel_path);
                 info!("Removing '{:?}'", path);
-                remove_file(&path)?;
+                remove_file(&path).await?;
             }
         }
 
@@ -144,9 +143,9 @@ pub struct Cache {
 }
 
 impl Cache {
-    fn new(mirror: Mirror) -> Result<Cache> {
+    async fn new(client: &Client, mirror: Mirror) -> Result<Cache> {
         let cache_dir = TempDir::new(env!("CARGO_PKG_NAME"))?;
-        mirror.repo.download_meta(&mirror.location, cache_dir.path())?;
+        mirror.repo.download_meta(client, &mirror.location, cache_dir.path()).await?;
 
         Ok(Cache {
             mirror: mirror,
@@ -154,38 +153,42 @@ impl Cache {
         })
     }
 
-    pub fn clone(&self, dest: &Path, check: bool) -> Result<()> {
-        let packages = self.metadata(self.dir.path())?;
-        packages.sync_all(&self.mirror.location, dest, check)?;
-        if let Some(deltas) = self.prestodelta(self.dir.path())? {
-            deltas.sync_all(&self.mirror.location, dest, check)?;
+    pub async fn clone(&self, client: &Client, dest: &Path, check: bool) -> Result<()> {
+        let packages = self.metadata(self.dir.path()).await?;
+        sync_all(client, &packages, &self.mirror.location, dest, check).await?;
+        if let Some(deltas) = self.prestodelta(self.dir.path()).await? {
+            sync_all(client, &deltas, &self.mirror.location, dest, check).await?;
         }
-        self.replace_metadata(dest)
+        self.replace_metadata(dest).await
     }
 
-    fn replace_metadata(&self, dest: &Path) -> Result<()> {
+    async fn replace_metadata(&self, dest: &Path) -> Result<()> {
         let target_meta_dir = dest.join(MD_DIR);
         let cache_meta_dir = self.dir.path().join(MD_DIR);
 
         if target_meta_dir.exists() {
             debug!("Replacing existing metadata in {:?}", target_meta_dir);
             // Delete existing metadata
-            for entry in read_dir(&target_meta_dir)? {
-                let path = entry?.path();
+            let mut entries = read_dir(&target_meta_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
                 debug!("Deleting {:?}", path);
-                remove_file(path)?;
+                remove_file(path).await?;
             }
         } else {
             debug!("Copying metadata to {:?}", target_meta_dir);
-            create_dir_all(&target_meta_dir)?;
+            create_dir_all(&target_meta_dir).await?;
         }
 
         // Copy new metadata
-        for entry in read_dir(&cache_meta_dir)? {
-            let src = entry?.path();
+        let mut entries = read_dir(&cache_meta_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let src = entry.path();
             let dest = target_meta_dir.join(src.file_name().unwrap());
             debug!("Copying {:?} to {:?}", src, dest);
-            copy(src, dest)?;
+            let mut src = File::open(src).await?;
+            let mut dest = File::open(dest).await?;
+            copy(&mut src, &mut dest).await?;
         }
 
         Ok(())
@@ -232,10 +235,38 @@ struct Location {
     href: String,
 }
 
+#[derive(Debug)]
+pub struct XmlDecodeError(String);
+
+impl std::error::Error for XmlDecodeError {}
+
+impl From<xml::Error> for XmlDecodeError {
+    fn from(error: xml::Error) -> Self {
+        XmlDecodeError(format!("{}", error))
+    }
+}
+
+impl From<std::io::Error> for XmlDecodeError {
+    fn from(error: std::io::Error) -> Self {
+        XmlDecodeError(format!("{}", error))
+    }
+}
+
+impl std::fmt::Display for XmlDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "XML decode: {}", self.0)
+    }
+}
+
 impl Repo {
     /// Read metadata for an entire repository.
-    pub fn decode<R: Read>(source: &mut R) -> ::std::result::Result<Repo, xml::Error> {
-        xml::deserialize(source)
+    pub async fn decode<R>(source: &mut R) -> ::std::result::Result<Repo, XmlDecodeError>
+    where
+        R: AsyncReadExt + AsyncRead + Unpin,
+    {
+        let mut text = String::new();
+        source.read_to_string(&mut text).await?;
+        Ok(xml::from_str(&text)?)
     }
 
     /// Returns a list of paths for metadata files to sync.
@@ -273,9 +304,9 @@ impl Repo {
     }
 
     /// Download the contents of a repo to a given path.
-    fn download_meta(&self, src: &Url, dest: &Path) -> Result<()> {
+    async fn download_meta(&self, client: &Client, src: &Url, dest: &Path) -> Result<()> {
         for file in self.meta_files() {
-            sync_file(file, src, dest, None)?;
+            sync_file(client, file, src, dest, None).await?;
         }
         Ok(())
     }
@@ -288,19 +319,19 @@ mod test {
     const LOCAL_REPOMD: &[u8] = include_bytes!("test-data/local/repodata/repomd.xml");
     const REMOTE_REPOMD: &[u8] = include_bytes!("test-data/remote/repodata/repomd.xml");
 
-    #[test]
-    fn check_dissimilar() {
-        let local = Repo::decode(&mut LOCAL_REPOMD).unwrap();
-        let remote = Repo::decode(&mut REMOTE_REPOMD).unwrap();
+    #[tokio::test]
+    async fn check_dissimilar() {
+        let local = Repo::decode(&mut LOCAL_REPOMD).await.unwrap();
+        let remote = Repo::decode(&mut REMOTE_REPOMD).await.unwrap();
 
         println!("{:?}\n{:?}", local, remote);
 
         assert_ne!(local, remote);
     }
 
-    #[test]
-    fn metadata_list() {
-        let remote = Repo::decode(&mut LOCAL_REPOMD).unwrap();
+    #[tokio::test]
+    async fn metadata_list() {
+        let remote = Repo::decode(&mut LOCAL_REPOMD).await.unwrap();
         let expected = vec![
             MD_PATH,
             "repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz",
@@ -318,9 +349,9 @@ mod test {
         assert_eq!(remote.meta_files(), expected);
     }
 
-    #[test]
-    fn primary_path() {
-        let remote = Repo::decode(&mut LOCAL_REPOMD).unwrap();
+    #[tokio::test]
+    async fn primary_path() {
+        let remote = Repo::decode(&mut LOCAL_REPOMD).await.unwrap();
         let expected = Path::new("repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz");
 
         assert_eq!(remote.primary_path().unwrap(), expected);

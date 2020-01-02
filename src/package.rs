@@ -8,53 +8,64 @@ use flate2::read::GzDecoder;
 use hex;
 use log::{debug, info};
 use openssl::hash::{Hasher, MessageDigest};
-use rayon::prelude::*;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use std::fmt::{self, Debug, Display};
-use std::fs::{File, OpenOptions, create_dir_all, rename};
-use std::io::Read;
+use tokio::fs::{File, OpenOptions, rename, create_dir_all};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use std::path::Path;
-use std::time::Duration;
 use std::collections::BTreeSet;
-use url::Url;
+use std::marker::Unpin;
 
 use failure::{format_err, bail};
 type Result<T> = ::std::result::Result<T, ::failure::Error>;
+
+use crate::repo::XmlDecodeError;
 
 /// A set of files that can be loaded from XML and fetched.
 pub trait Fetch: DeserializeOwned {
     /// Generate a sorted list of packages for the repository.
     fn files(&self) -> BTreeSet<(&str, &Checksum)>;
 
-    /// Decode a stream into metadata
-    fn decode<R: Read>(source: &mut R) -> Result<Self> {
-        let mut bytes = Vec::new();
-        source.read_to_end(&mut bytes)?;
-        Self::decode_raw(bytes.as_slice())
-    }
 
     /// Decode a raw slice of data
     fn decode_raw(source: &[u8]) -> Result<Self> {
         if magic::match_u8("application/gzip", source) {
             debug!("Metadata is gzip encoded");
-            Ok(xml::deserialize(GzDecoder::new(source))?)
+            Ok(xml::from_reader(GzDecoder::new(source)).map_err(XmlDecodeError::from)?)
         } else if magic::match_u8("application/xml", source) {
             debug!("Metadata is raw xml");
-            Ok(xml::deserialize(source)?)
+            Ok(xml::from_reader(source).map_err(XmlDecodeError::from)?)
         } else {
             Err(format_err!("Primary metadata in incompatible filetype"))
         }
     }
+}
 
-    /// Download all files to destination.
-    fn sync_all(&self, src: &Url, dest: &Path, check: bool) -> Result<()> {
-        self.files().into_par_iter().try_for_each(|(file, checksum)| {
-            let checksum = if check { Some(checksum) } else { None };
-            sync_file(file, src, dest, checksum)
-        })?;
+/// Decode a stream into metadata
+pub async fn decode<R, F>(source: &mut R) -> Result<F>
+where
+    R: AsyncReadExt + AsyncRead + Unpin,
+    F: Fetch,
+{
+    let mut bytes = Vec::new();
+    source.read_to_end(&mut bytes).await?;
+    F::decode_raw(bytes.as_slice())
+}
 
-        Ok(())
+/// Download all files to destination.
+pub async fn sync_all(
+    client: &Client,
+    fetch: &impl Fetch,
+    src: &Url,
+    dest: &Path,
+    check: bool,
+) -> Result<()> {
+    for (file, checksum) in fetch.files() {
+        let checksum = if check { Some(checksum) } else { None };
+        sync_file(client, file, src, dest, checksum).await?
     }
+
+    Ok(())
 }
 
 /// A collection of package metadata.
@@ -168,7 +179,7 @@ pub struct Checksum {
 }
 
 impl Checksum {
-    fn check(&self, path: impl AsRef<Path>) -> Result<bool> {
+    async fn check(&self, path: impl AsRef<Path>) -> Result<bool> {
         let digest = match self.algorithm.as_str() {
             "md5" => MessageDigest::md5(),
             "sha1" => MessageDigest::sha1(),
@@ -182,11 +193,11 @@ impl Checksum {
 
         let mut hasher = Hasher::new(digest)?;
 
-        let mut file = File::open(path)?;
+        let mut file = File::open(path).await?;
         let mut block = vec![0; 1024 * 1024 * 8];
 
         loop {
-            let bytes_read = file.read(&mut block)?;
+            let bytes_read = file.read(&mut block).await?;
             if bytes_read == 0 {
                 break;
             }
@@ -202,7 +213,13 @@ impl Checksum {
 }
 
 /// Synchronise a remote file to a local location.
-pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Checksum>) -> Result<()> {
+pub async fn sync_file(
+    client: &Client,
+    relative: &str,
+    src: &Url,
+    dest: &Path,
+    checksum: Option<&Checksum>,
+) -> Result<()> {
     let remote_path = src.join(&relative)?;
     let local_path = dest.join(&relative);
     let temp_path = local_path.with_extension("sync.tmp");
@@ -210,7 +227,7 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Check
     if local_path.exists() {
         if let Some(checksum) = checksum {
             info!("Verifying checksum of {:?}", local_path);
-            if checksum.check(&local_path)? {
+            if checksum.check(&local_path).await? {
                 debug!("Skipping (already exists with valid checksum) {:?}", remote_path);
                 return Ok(());
             } else {
@@ -224,37 +241,36 @@ pub fn sync_file(relative: &str, src: &Url, dest: &Path, checksum: Option<&Check
 
     info!("Downloading \"{}\" to {:?}", remote_path, local_path);
 
-    create_dir_all(local_path.parent().expect("Invalid repository structure"))?;
-    download(&remote_path, &temp_path)?;
+    create_dir_all(local_path.parent().expect("Invalid repository structure")).await?;
+    download(client, &remote_path, &temp_path).await?;
     if let Some(checksum) = checksum {
         info!("Verifying checksum of {:?}", remote_path);
-        if !checksum.check(&temp_path)? {
+        if !checksum.check(&temp_path).await? {
             bail!("Remote file failed checksum {:?}", temp_path);
         }
     }
-    rename(&temp_path, &local_path)?;
+    rename(&temp_path, &local_path).await?;
     Ok(())
 }
 
 /// Download a network file to a local file
-fn download(src: &Url, dest: &Path) -> Result<()> {
-    let client = Client::builder()
-        .timeout(Some(Duration::from_secs(600)))
-        .gzip(false)
-        .build()?;
+async fn download(client: &Client, src: &Url, dest: &Path) -> Result<()> {
+    let mut src = client.get(src.clone()).send().await?;
     let mut local = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(dest)?;
-    let mut remote = client.get(src.clone()).send()?;
-    remote.copy_to(&mut local)?;
+        .open(dest)
+        .await?;
+    while let Some(chunk) = src.chunk().await? {
+        local.write_all(&chunk[..]).await?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Metadata, Fetch};
+    use super::{Metadata, decode};
 
     const LOCAL_XML: &[u8] = include_bytes!(
         "test-data/local/repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz"
@@ -263,9 +279,9 @@ mod test {
         "test-data/remote/repodata/328a9f961ff596aedac41d051634325110b8fb30b87c00f678c257644337d1d6-primary.xml.gz"
     );
 
-    #[test]
-    fn read_packages() {
-        let local = Metadata::decode(&mut LOCAL_XML).unwrap();
+    #[tokio::test]
+    async fn read_packages() {
+        let local: Metadata = decode(&mut LOCAL_XML).await.unwrap();
 
         assert_eq!(local.packages.len(), 11331);
     }

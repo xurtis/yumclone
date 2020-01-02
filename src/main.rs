@@ -50,7 +50,8 @@ struct Args {
     config: Option<String>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     let args = Args::from_args();
@@ -60,7 +61,7 @@ fn main() {
 
     for repo in configs.repo {
         debug!("Loaded repo: {:?}", repo);
-        if let Err(e) = repo.sync(args.check) {
+        if let Err(e) = repo.sync(args.check).await {
             error!("Error synchronising: {}'", e);
             debug!("Error backtrace:\n{:?}", e.backtrace());
         }

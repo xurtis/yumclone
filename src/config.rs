@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use url::Url;
+use std::time::Duration;
+use reqwest::Client;
 use serde::Deserialize;
 use log::{debug, warn, info};
 
@@ -13,64 +14,58 @@ type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    #[serde(with = "url_serde")]
-    src: Url,
+    src: String,
     dest: String,
     #[serde(default)]
     tags: HashMap<String, Vec<String>>,
 }
 
-macro_rules! try_load_mirror {
-    ($fn:path, $url:expr) => {
-        match $fn($url) {
-            Err(e) => {
-                debug!("Error Backtrace:\n{:?}", e.backtrace());
-                warn!("Error: {}", e);
-                warn!("Could not load '{}' (skipping)", $url);
-                continue;
-            }
-            Ok(mirror) => mirror,
-        }
-    }
-}
-
 impl Config {
-    pub fn sync(&self, check: bool) -> Result<()>{
+    pub async fn sync(&self, check: bool) -> Result<()> {
         let url_pairs = UrlMux::new(
-            self.src.as_str(),
+            &self.src,
             &self.dest,
             &self.tags
         );
 
+        // Use a shared connection for each repo
+        let client = Client::builder()
+            .timeout(Duration::from_secs(600))
+            .gzip(false)
+            .build()?;
+
         // Enumerate Variants
         for (src, dest) in url_pairs {
             info!("Syncing '{}' to '{}'", src, dest);
-            let remote = try_load_mirror!(Mirror::remote, &src);
 
-            if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
-                if remote.same_version(&local) && !check {
-                    info!("Repository '{}' is up to date", dest);
-                    continue;
-                }
-            }
-
-            info!("Downloading repo from '{}'", src);
-            let remote = remote.into_cache()?;
-            remote.clone(&Path::new(&dest), check)?;
-            if let Some(local) = try_load_mirror!(Mirror::local, &dest) {
-                info!("Cleaning repo in '{}'", dest);
-                local.clean()?;
+            if let Err(err) = self.sync_pair(&client, (&src, &dest), check).await {
+                debug!("Error Backtrace:\n{:?}", err.backtrace());
+                warn!("Error: {}", err);
             }
         }
 
-        // Download new metadata
-        // Load local index
-        // Load remote index
-        // Diff index
-        // Download new
-        // Download replaces
-        // Replace metadata
-        // Remove expired
+        Ok(())
+    }
+
+    async fn sync_pair(&self, client: &Client, pair: (&str, &str), check: bool) -> Result<()> {
+        let (src, dest) = pair;
+        let remote = Mirror::remote(&client, &src).await?;
+
+        if let Some(local) = Mirror::local(&dest).await? {
+            if remote.same_version(&local) && !check {
+                info!("Repository '{}' is up to date", dest);
+                return Ok(());
+            }
+        }
+
+        info!("Downloading repo from '{}'", src);
+        let remote = remote.into_cache(client).await?;
+        remote.clone(client, &Path::new(&dest), check).await?;
+        if let Some(local) = Mirror::local(&dest).await? {
+            info!("Cleaning repo in '{}'", dest);
+            local.clean().await?;
+        }
+
         Ok(())
     }
 }
