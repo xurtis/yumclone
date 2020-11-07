@@ -1,23 +1,23 @@
 //! Represetnation of repository metadata.
 
+use std::cmp::PartialEq;
 use std::collections::HashSet;
 use std::env::current_dir;
-use tokio::fs::{File, OpenOptions, read_dir, remove_file, create_dir_all};
-use tokio::io::{AsyncRead, AsyncReadExt, copy};
-use std::ops::Deref;
-use std::cmp::PartialEq;
-use std::path::{Path, PathBuf};
 use std::marker::Unpin;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use tokio::fs::{create_dir_all, read_dir, remove_file, File, OpenOptions};
+use tokio::io::{copy, AsyncRead, AsyncReadExt};
 
+use failure::format_err;
+use log::{debug, info};
 use reqwest::{Client, Url};
-use serde_xml_rs as xml;
 use serde::*;
+use serde_xml_rs as xml;
 use tempdir::TempDir;
 use walkdir::WalkDir;
-use log::{debug, info};
-use failure::format_err;
 
-use crate::package::{Fetch, Metadata, PrestoDelta, sync_file, sync_all, decode};
+use crate::package::{decode, sync_all, sync_file, Check, CheckType, Fetch, Metadata, PrestoDelta};
 
 pub const MD_DIR: &'static str = "repodata";
 pub const MD_PATH: &'static str = "repodata/repomd.xml";
@@ -50,12 +50,11 @@ impl Mirror {
 
     /// Load a mirror from a local location.
     pub async fn local(path: &str) -> Result<Option<Mirror>> {
-        let local_path = current_dir()?
-            .join(path);
-        let local_path_str = local_path.to_str()
+        let local_path = current_dir()?.join(path);
+        let local_path_str = local_path
+            .to_str()
             .ok_or(format_err!("Couldn't decode directory: {}", path))?;
-        let url = Url::parse("file:///")?
-            .join(local_path_str)?;
+        let url = Url::parse("file:///")?.join(local_path_str)?;
 
         let md_path = Path::new(path).join(MD_PATH);
         debug!("Loading local metadata from {:?}", md_path);
@@ -90,7 +89,9 @@ impl Mirror {
     pub async fn prestodelta(&self, base_path: &Path) -> Result<Option<PrestoDelta>> {
         if let Some(prestodelta_path) = self.repo.prestodelta_path() {
             let prestodelta_path = base_path.join(prestodelta_path);
-            Ok(Some(decode(&mut File::open(prestodelta_path).await?).await?))
+            Ok(Some(
+                decode(&mut File::open(prestodelta_path).await?).await?,
+            ))
         } else {
             Ok(None)
         }
@@ -103,21 +104,16 @@ impl Mirror {
         let prestodelta = self.prestodelta(base_path).await?;
         debug!("Removing extraneous files in '{:?}'", base_path);
 
-        let mut files: HashSet<_> = self.repo
-            .meta_files()
-            .into_iter()
-            .map(Path::new)
-            .collect();
-
+        let mut files: HashSet<_> = self.repo.meta_files().into_iter().map(Path::new).collect();
 
         let package_files = metadata.files();
 
-        for (file, _) in package_files {
+        for (file, _, _) in package_files {
             files.insert(Path::new(file));
         }
 
         if let Some(deltas) = &prestodelta {
-            for (file, _) in deltas.files() {
+            for (file, _, _) in deltas.files() {
                 files.insert(Path::new(file));
             }
         }
@@ -146,7 +142,10 @@ impl Cache {
     async fn new(client: &Client, mirror: Mirror) -> Result<Cache> {
         let cache_dir = TempDir::new(env!("CARGO_PKG_NAME"))?;
         debug!("Caching metadata in {}", cache_dir.path().to_str().unwrap());
-        mirror.repo.download_meta(client, &mirror.location, cache_dir.path()).await?;
+        mirror
+            .repo
+            .download_meta(client, &mirror.location, cache_dir.path())
+            .await?;
 
         Ok(Cache {
             mirror: mirror,
@@ -154,7 +153,7 @@ impl Cache {
         })
     }
 
-    pub async fn clone(&self, client: &Client, dest: &Path, check: bool) -> Result<()> {
+    pub async fn clone(&self, client: &Client, dest: &Path, check: CheckType) -> Result<()> {
         let packages = self.metadata(self.dir.path()).await?;
         sync_all(client, &packages, &self.mirror.location, dest, check).await?;
         if let Some(deltas) = self.prestodelta(self.dir.path()).await? {
@@ -208,7 +207,6 @@ impl Deref for Cache {
         &self.mirror
     }
 }
-
 
 /// Representation of a whole repository.
 #[derive(Debug, Eq, Deserialize)]
@@ -278,9 +276,7 @@ impl Repo {
     /// Returns a list of paths for metadata files to sync.
     pub fn meta_files(&self) -> Vec<&str> {
         let mut files = vec![MD_PATH];
-        let mut decoded = self.data.iter()
-            .map(|d| d.location.href.as_str())
-            .collect();
+        let mut decoded = self.data.iter().map(|d| d.location.href.as_str()).collect();
         files.append(&mut decoded);
         return files;
     }
@@ -312,7 +308,7 @@ impl Repo {
     /// Download the contents of a repo to a given path.
     async fn download_meta(&self, client: &Client, src: &Url, dest: &Path) -> Result<()> {
         for file in self.meta_files() {
-            sync_file(client, file, src, dest, None).await?;
+            sync_file(client, file, src, dest, Check::Metadata).await?;
         }
         Ok(())
     }

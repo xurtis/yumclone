@@ -1,12 +1,13 @@
 //! Configuration of the repo tool.
 
+use log::{debug, info, warn};
+use reqwest::Client;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-use reqwest::Client;
-use serde::Deserialize;
-use log::{debug, warn, info};
 
+use crate::package::CheckType;
 use crate::repo::*;
 use crate::urlmux::*;
 
@@ -21,12 +22,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub async fn sync(&self, check: bool) -> Result<()> {
-        let url_pairs = UrlMux::new(
-            &self.src,
-            &self.dest,
-            &self.tags
-        );
+    pub async fn sync(&self, check: CheckType) -> Result<()> {
+        let url_pairs = UrlMux::new(&self.src, &self.dest, &self.tags);
 
         // Use a shared connection for each repo
         let client = Client::builder()
@@ -47,12 +44,12 @@ impl Config {
         Ok(())
     }
 
-    async fn sync_pair(&self, client: &Client, pair: (&str, &str), check: bool) -> Result<()> {
+    async fn sync_pair(&self, client: &Client, pair: (&str, &str), check: CheckType) -> Result<()> {
         let (src, dest) = pair;
         let remote = Mirror::remote(&client, &src).await?;
 
         if let Some(local) = Mirror::local(&dest).await? {
-            if remote.same_version(&local) && !check {
+            if remote.same_version(&local) && check.remote_only() {
                 info!("Repository '{}' is up to date", dest);
                 return Ok(());
             }

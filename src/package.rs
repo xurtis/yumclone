@@ -1,23 +1,23 @@
 //! Representation of package metadata from a YUM repository.
 
-use serde_xml_rs as xml;
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
-use tree_magic as magic;
 use flate2::read::GzDecoder;
 use hex;
 use log::{debug, info};
 use openssl::hash::{Hasher, MessageDigest};
 use reqwest::{Client, Url};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_xml_rs as xml;
+use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Display};
-use tokio::fs::{File, OpenOptions, rename, create_dir_all};
+use std::marker::Unpin;
+use std::path::Path;
+use tokio::fs::{create_dir_all, metadata, rename, File, OpenOptions};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::unbounded_channel;
-use std::path::Path;
-use std::collections::BTreeSet;
-use std::marker::Unpin;
+use tree_magic as magic;
 
-use failure::{format_err, bail};
+use failure::{bail, format_err};
 type Result<T> = ::std::result::Result<T, ::failure::Error>;
 
 use crate::repo::XmlDecodeError;
@@ -25,8 +25,7 @@ use crate::repo::XmlDecodeError;
 /// A set of files that can be loaded from XML and fetched.
 pub trait Fetch: DeserializeOwned {
     /// Generate a sorted list of packages for the repository.
-    fn files(&self) -> BTreeSet<(&str, &Checksum)>;
-
+    fn files(&self) -> BTreeSet<(&str, u64, &Checksum)>;
 
     /// Decode a raw slice of data
     fn decode_raw(source: &[u8]) -> Result<Self> {
@@ -59,11 +58,15 @@ pub async fn sync_all(
     fetch: &impl Fetch,
     src: &Url,
     dest: &Path,
-    check: bool,
+    check: CheckType,
 ) -> Result<()> {
-    for (file, checksum) in fetch.files() {
-        let checksum = if check { Some(checksum) } else { None };
-        sync_file(client, file, src, dest, checksum).await?
+    for (file, size, checksum) in fetch.files() {
+        let check = match check {
+            CheckRemoteSize => Check::RemoteSize(size),
+            CheckSize => Check::Size(size),
+            CheckHash => Check::Hash(size, checksum),
+        };
+        sync_file(client, file, src, dest, check).await?
     }
 
     Ok(())
@@ -77,8 +80,11 @@ pub struct Metadata {
 }
 
 impl Fetch for Metadata {
-    fn files(&self) -> BTreeSet<(&str, &Checksum)> {
-        self.packages().into_iter().map(|p| (p.location(), &p.checksum)).collect()
+    fn files(&self) -> BTreeSet<(&str, u64, &Checksum)> {
+        self.packages()
+            .into_iter()
+            .map(|p| (p.location(), p.size.package, &p.checksum))
+            .collect()
     }
 }
 
@@ -99,6 +105,7 @@ pub struct Package {
     version: Version,
     name: String,
     checksum: Checksum,
+    size: Size,
 }
 
 impl Package {
@@ -116,17 +123,13 @@ pub struct Version {
 }
 
 impl Debug for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>)
-        -> ::std::result::Result<(), fmt::Error>
-    {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> ::std::result::Result<(), fmt::Error> {
         write!(f, "ver({}, {}, {})", self.epoch, self.ver, self.rel)
     }
 }
 
 impl Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>)
-        -> ::std::result::Result<(), fmt::Error>
-    {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> ::std::result::Result<(), fmt::Error> {
         write!(f, "{}-{}-{}", self.epoch, self.ver, self.rel)
     }
 }
@@ -139,11 +142,12 @@ pub struct PrestoDelta {
 }
 
 impl Fetch for PrestoDelta {
-    fn files(&self) -> BTreeSet<(&str, &Checksum)> {
-        self.new_packages.iter()
+    fn files(&self) -> BTreeSet<(&str, u64, &Checksum)> {
+        self.new_packages
+            .iter()
             .fold(BTreeSet::new(), |set, new_package| {
                 new_package.deltas.iter().fold(set, |mut set, delta| {
-                    set.insert((delta.filename.as_ref(), &delta.checksum));
+                    set.insert((delta.filename.as_ref(), delta.size, &delta.checksum));
                     set
                 })
             })
@@ -162,6 +166,14 @@ struct NewPackage {
 struct Delta {
     filename: String,
     checksum: Checksum,
+    size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+struct Size {
+    package: u64,
+    installed: u64,
+    archive: u64,
 }
 
 /// Location information for a package.
@@ -214,25 +226,42 @@ impl Checksum {
 }
 
 /// Synchronise a remote file to a local location.
-pub async fn sync_file(
+pub async fn sync_file<'c>(
     client: &Client,
     relative: &str,
     src: &Url,
     dest: &Path,
-    checksum: Option<&Checksum>,
+    check: Check<'c>,
 ) -> Result<()> {
     let remote_path = src.join(&relative)?;
     let local_path = dest.join(&relative);
     let temp_path = local_path.with_extension("sync.tmp");
 
     if local_path.exists() {
-        if let Some(checksum) = checksum {
-            info!("Verifying checksum of {:?}", local_path);
-            if checksum.check(&local_path).await? {
-                debug!("Skipping (already exists with valid checksum) {:?}", remote_path);
+        let local_size = metadata(&local_path).await?.len();
+        if let Check::Hash(size, checksum) = check {
+            info!("Verifying size and checksum of {:?}", local_path);
+            if local_size != size {
+                debug!("Local file incorrect size {:?}", local_path);
+            } else if checksum.check(&local_path).await? {
+                debug!(
+                    "Skipping (already exists with valid checksum) {:?}",
+                    remote_path
+                );
                 return Ok(());
             } else {
                 debug!("Local file failed checksum {:?}", local_path);
+            }
+        } else if let Check::Size(size) = check {
+            info!("Verifying size of {:?}", local_path);
+            if local_size != size {
+                debug!("Local file incorrect size {:?}", local_path);
+            } else {
+                debug!(
+                    "Skipping (already exists with valid size) {:?}",
+                    remote_path
+                );
+                return Ok(());
             }
         } else {
             debug!("Skipping (already exists) {:?}", remote_path);
@@ -243,19 +272,67 @@ pub async fn sync_file(
     info!("Downloading \"{}\" to {:?}", remote_path, local_path);
 
     create_dir_all(local_path.parent().expect("Invalid repository structure")).await?;
-    download(client, &remote_path, &temp_path).await?;
-    if let Some(checksum) = checksum {
-        info!("Verifying checksum of {:?}", remote_path);
-        if !checksum.check(&temp_path).await? {
-            bail!("Remote file failed checksum {:?}", temp_path);
+    let download_size = download(client, &remote_path, &temp_path).await?;
+    match check {
+        Check::RemoteSize(size) | Check::Size(size) => {
+            info!("Verifying size of {:?}", remote_path);
+            if download_size != size {
+                bail!("Remote file failed size {:?}", temp_path);
+            }
+        }
+        Check::Hash(size, checksum) => {
+            info!("Verifying size and checksum of {:?}", remote_path);
+            if download_size != size {
+                bail!("Remote file failed size {:?}", temp_path);
+            } else if !checksum.check(&temp_path).await? {
+                bail!("Remote file failed checksum {:?}", temp_path);
+            }
+        }
+        Check::Metadata => {
+            // Don't know size of metadata ahead of time
         }
     }
     rename(&temp_path, &local_path).await?;
     Ok(())
 }
 
+/// The kind of check to be made on a package
+#[derive(Debug, Clone, Copy)]
+pub enum CheckType {
+    /// Only check the size of the downloadeded package
+    CheckRemoteSize,
+    /// Check the size of the package
+    CheckSize,
+    /// Check the hash of the file
+    CheckHash,
+}
+pub use CheckType::*;
+
+impl CheckType {
+    /// Check if the type is only for remote files
+    pub fn remote_only(self) -> bool {
+        match self {
+            CheckType::CheckRemoteSize => true,
+            _ => false,
+        }
+    }
+}
+
+/// Check data to use when checking a package
+#[derive(Debug, Clone, Copy)]
+pub enum Check<'c> {
+    /// Don't have check for metadata
+    Metadata,
+    /// Only check remote size
+    RemoteSize(u64),
+    /// Check the size of the file
+    Size(u64),
+    /// Check the size and hash of the file
+    Hash(u64, &'c Checksum),
+}
+
 /// Download a network file to a local file
-async fn download(client: &Client, src: &Url, dest: &Path) -> Result<()> {
+async fn download(client: &Client, src: &Url, dest: &Path) -> Result<u64> {
     let src = src.to_owned();
     let request = client.get(src);
     let dest = dest.to_owned();
@@ -271,30 +348,32 @@ async fn download(client: &Client, src: &Url, dest: &Path) -> Result<()> {
         Ok(())
     });
 
-    let disk: tokio::task::JoinHandle<Result<()>> = tokio::spawn(async move {
+    let disk: tokio::task::JoinHandle<Result<u64>> = tokio::spawn(async move {
         let mut local = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(dest)
             .await?;
+        let mut size = 0;
 
         while let Some(chunk) = rx.recv().await {
+            size += chunk.len() as u64;
             local.write_all(&chunk[..]).await?;
         }
 
-        Ok(())
+        Ok(size)
     });
 
-    disk.await??;
+    let size = disk.await??;
     network.await??;
 
-    Ok(())
+    Ok(size)
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Metadata, decode};
+    use super::{decode, Metadata};
 
     const LOCAL_XML: &[u8] = include_bytes!(
         "test-data/local/repodata/84fe7bb9cf340186df02863647f41a4be32c86a21b80eaaeddaa97e99a24b7a6-primary.xml.gz"

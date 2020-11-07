@@ -24,6 +24,7 @@ mod repo;
 pub mod urlmux;
 
 use crate::config::Config;
+use crate::package::CheckType::*;
 pub use crate::repo::Repo;
 
 #[derive(Debug, Deserialize)]
@@ -42,9 +43,12 @@ impl Default for Configs {
 #[derive(StructOpt)]
 #[structopt(about = "Synchronise a remote rpm repository.")]
 struct Args {
-    /// Ensure that local files match their checksums
+    /// Ensure that local files match their checksums (implies size check)
     #[structopt(short = "c", long = "check")]
     check: bool,
+    /// Ensure that local files match their sizes
+    #[structopt(short = "s", long = "size")]
+    size: bool,
     /// Configuration file
     #[structopt(short = "C", long = "config")]
     config: Option<String>,
@@ -55,16 +59,24 @@ async fn main() {
     env_logger::init();
 
     let args = Args::from_args();
-    let config_file = args.config.as_ref().map(|s| s.as_str()).unwrap_or(env!("CARGO_PKG_NAME"));
-    let configs: Configs = Load::try_load(config_file)
-        .expect("Could not load configuration");
+    let config_file = args
+        .config
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or(env!("CARGO_PKG_NAME"));
+    let configs: Configs = Load::try_load(config_file).expect("Could not load configuration");
+
+    let check = match (args.check, args.size) {
+        (true, _) => CheckHash,
+        (false, true) => CheckSize,
+        (false, false) => CheckRemoteSize,
+    };
 
     for repo in configs.repo {
         debug!("Loaded repo: {:?}", repo);
-        if let Err(e) = repo.sync(args.check).await {
+        if let Err(e) = repo.sync(check).await {
             error!("Error synchronising: {}'", e);
             debug!("Error backtrace:\n{:?}", e.backtrace());
         }
     }
 }
-
