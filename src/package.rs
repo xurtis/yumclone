@@ -12,9 +12,12 @@ use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Display};
 use std::marker::Unpin;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::fs::{create_dir_all, metadata, rename, File, OpenOptions};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::Mutex;
+use tokio::try_join;
 use tree_magic as magic;
 
 use failure::{bail, format_err};
@@ -60,16 +63,34 @@ pub async fn sync_all(
     dest: &Path,
     check: CheckType,
 ) -> Result<()> {
-    for (file, size, checksum) in fetch.files() {
-        let check = match check {
-            CheckRemoteSize => Check::RemoteSize(size),
-            CheckSize => Check::Size(size),
-            CheckHash => Check::Hash(size, checksum),
-        };
-        sync_file(client, file, src, dest, check).await?
-    }
+    let queue = Arc::new(Mutex::new(fetch.files().into_iter()));
 
-    Ok(())
+    let worker = move || {
+        let queue = queue.clone();
+        async move {
+            while let Some((file, size, checksum)) = queue.lock().await.next() {
+                let check = match check {
+                    CheckRemoteSize => Check::RemoteSize(size),
+                    CheckSize => Check::Size(size),
+                    CheckHash => Check::Hash(size, checksum),
+                };
+                sync_file(client, file, src, dest, check).await?
+            }
+            Ok(())
+        }
+    };
+
+    try_join!(
+        worker(),
+        worker(),
+        worker(),
+        worker(),
+        worker(),
+        worker(),
+        worker(),
+        worker()
+    )
+    .map(|_| ())
 }
 
 /// A collection of package metadata.
