@@ -261,7 +261,7 @@ pub async fn sync_file<'c>(
     if local_path.exists() {
         let local_size = metadata(&local_path).await?.len();
         if let Check::Hash(size, checksum) = check {
-            info!("Verifying size and checksum of {:?}", local_path);
+            debug!("Verifying size and checksum of {:?}", local_path);
             if local_size != size {
                 debug!("Local file incorrect size {:?}", local_path);
             } else if checksum.check(&local_path).await? {
@@ -274,7 +274,7 @@ pub async fn sync_file<'c>(
                 debug!("Local file failed checksum {:?}", local_path);
             }
         } else if let Check::Size(size) = check {
-            info!("Verifying size of {:?}", local_path);
+            debug!("Verifying size of {:?}", local_path);
             if local_size != size {
                 debug!("Local file incorrect size {:?}", local_path);
             } else {
